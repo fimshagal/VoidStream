@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chaos — black-box entropy</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+    <header class="page-head">
+        <h1>chaos</h1>
+        <p class="tagline">black-box entropy from open data — randomness with provenance</p>
+    </header>
+
+    <main class="grid">
+        <section class="card draw">
+            <h2>draw</h2>
+            <div class="controls">
+                <button data-op="int">int()</button>
+                <button data-op="int-range">int(0, 100)</button>
+                <button data-op="unit">unit()</button>
+                <button data-op="float">float(-10, 10)</button>
+                <button data-op="bytes">bytes(16)</button>
+                <button data-op="vec2i">intVec(2, 0, 256)</button>
+                <button data-op="vec3f">floatVec(3, -1, 1)</button>
+                <button data-op="vec4i">intVec(4, 0, 100)</button>
+                <button data-op="mat2i">intMatrix(2, 2, 0, 9)</button>
+                <button data-op="mat3f">floatMatrix(3, 3)</button>
+                <button data-op="hash">hash()</button>
+                <button data-op="hashSalt">hash({ salt })</button>
+                <button data-op="mix">mix("...")</button>
+            </div>
+            <pre id="output" class="output">click any button to draw a value</pre>
+        </section>
+
+        <section class="card status">
+            <h2>library</h2>
+            <div class="status-row">
+                <span class="status-dot ok"></span>
+                <span class="status-label">running silently</span>
+            </div>
+            <p class="hint">
+                once constructed, <code>Chaos</code> refreshes its own pool in
+                the background forever. there is no stop, no isRunning, no pull
+                — by design.
+            </p>
+            <div class="messages-head">messages</div>
+            <ol id="messages" class="messages">
+                <li class="placeholder">no warnings — pool refreshes silently</li>
+            </ol>
+            <p class="hint">
+                this panel only reflects what <code>console.warn</code> the lib
+                emits. it tells you nothing about which sources were used, when,
+                or how often — that is on purpose.
+            </p>
+            <div class="controls compact">
+                <button id="btn-sample-warning" type="button" title="emit a synthetic [chaos] warning to preview what consumers would see">show sample warning</button>
+            </div>
+        </section>
+
+        <section class="card field">
+            <h2>noise field</h2>
+            <p class="hint">
+                32&times;16 RGB cells, each colored by three bytes drawn from the pool. nothing leaks here — it is just the pool turned into pixels.
+            </p>
+            <div id="noise-canvas" class="noise-grid"></div>
+            <div class="controls compact">
+                <button id="btn-shuffle" type="button">shuffle</button>
+                <button id="btn-autoshuffle" type="button">auto: off</button>
+            </div>
+        </section>
+    </main>
+
+    <footer class="page-foot">
+        <span>pool refreshes silently every 5..15 min from a hidden set of open data sources</span>
+    </footer>
+
+    <script type="module" src="/src/demo.ts"></script>
+</body>
+</html>

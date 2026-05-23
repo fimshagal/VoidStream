@@ -1,0 +1,39 @@
+{
+  "name": "entropy-chaos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Real-noise entropy library powered by open data sources (NASA, USGS, etc.)",
+  "type": "module",
+  "main": "./dist/lib/chaos.cjs",
+  "module": "./dist/lib/chaos.js",
+  "types": "./dist/lib/types/index.d.ts",
+  "unpkg": "./dist/lib/chaos.umd.cjs",
+  "jsdelivr": "./dist/lib/chaos.umd.cjs",
+  "exports": {
+    ".": {
+      "types": "./dist/lib/types/index.d.ts",
+      "import": "./dist/lib/chaos.js",
+      "require": "./dist/lib/chaos.cjs",
+      "default": "./dist/lib/chaos.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/lib",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:demo": "vite build",
+    "build": "npm run typecheck && npm run build:lib && npm run build:demo",
+    "preview": "vite preview --outDir dist/demo"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^5.4.3",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.10"
+  }
+}
