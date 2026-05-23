@@ -1,4 +1,5 @@
 import type { EntropySource } from "./sources/types";
+import { unrefTimer } from "./utils";
 
 export interface SchedulerOptions {
     /** Список джерел; порожній масив фактично вимикає фоновий збір. */
@@ -59,21 +60,6 @@ const FIFTEEN_MIN = 15 * 60 * 1000;
  * не дзвонити в API синхронним натовпом.
  */
 const INITIAL_JITTER_MAX_MS = 1500;
-
-/**
- * `setTimeout` у Node повертає об'єкт `Timeout` з методом `.unref()`, який
- * прибирає таймер з лічильника подій runtime — тобто Node-процес зможе
- * вийти, навіть якщо ще є невиконаний таймер. У браузері `setTimeout`
- * повертає number, і ця операція не потрібна (там цикл подій тримається
- * сторінкою, а не таймером).
- *
- * Це критично для тестів і скриптів, які створюють VoidStream: інакше
- * Node висне до першого планового fetch-у, якого ми не хочемо.
- */
-function unrefTimer(t: ReturnType<typeof setTimeout>): void {
-    const handle = t as unknown as { unref?: () => void };
-    if (typeof handle?.unref === "function") handle.unref();
-}
 
 /**
  * Фоновий планувальник:

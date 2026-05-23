@@ -55,8 +55,9 @@
             <p class="hint">
                 <code>coverage</code> = share of available entropy sources that have
                 ever delivered bytes into the pool. starts at <code>0%</code> right
-                after construction (pool is on bootstrap entropy only); first
-                network fetch lands within ~1.5s, the rest stream in over time.
+                after construction (pool is on bootstrap entropy only); local
+                idle-stir and network fetches run in the background — first
+                local mix within ~1–3s, first network tick within ~1.5s.
             </p>
             <div class="messages-head">messages</div>
             <ol id="messages" class="messages">

@@ -43,3 +43,12 @@ export function clampText(text: string, maxBytes: number): string {
     if (text.length <= maxBytes) return text;
     return text.slice(0, maxBytes);
 }
+
+/**
+ * `setTimeout` у Node повертає `Timeout` з `.unref()` — процес може
+ * завершитись без очікування таймера. У браузері no-op.
+ */
+export function unrefTimer(t: ReturnType<typeof setTimeout>): void {
+    const handle = t as unknown as { unref?: () => void };
+    if (typeof handle?.unref === "function") handle.unref();
+}

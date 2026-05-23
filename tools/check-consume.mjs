@@ -3,8 +3,8 @@
 //
 // Інстанс створюється БЕЗ опцій — це означає що активується повний
 // дефолтний набір джерел. Планувальник стартує автоматично, але:
-//   1. Перший fetch має короткий jitter [0, 1500ms); подальші — у вікні
-//      5..15 хв.
+//   1. Перший мережевий fetch — jitter [0, 1500ms); локальний idle-stir —
+//      [1s, 3s) без HTTP; подальші мережеві — адаптивно до coverage.
 //   2. Викликає setTimeout(...).unref() у Node, тому процес виходить
 //      одразу після завершення тіла тесту, без очікування таймера.
 // Жодного мережевого запиту під час тесту не відбувається.
@@ -246,18 +246,13 @@ assert.ok(
 // hash() лишається як alias — перевіряємо що він є.
 assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
 
-// Самообслуговування scheduler-а: він НЕ повинен звертатися до Math.random,
-// а перший fetch має призначатися на короткий jitter [0, 1500ms), а не
-// чекати 5+ хв як раніше. Підміняємо Math.random на трап і setTimeout
-// на спостерігач, створюємо два інстанси і перевіряємо:
-//   1. Math.random жодного разу не викликана.
-//   2. Кожен інстанс викликав setTimeout — це стартова затримка.
-//   3. Початкова затримка лежить у вікні [0, INITIAL_MAX_MS).
-//   4. Дві незалежні VoidStream-сутності отримують РІЗНІ стартові затримки
-//      — це доводить, що значення тягнеться з пулу, а не зі статичної
-//      константи.
+// Самообслуговування: рішення з PRNG-пулу, не Math.random. На старті
+// кожен інстанс планує мережевий jitter [0, 1500ms) і локальний stir
+// [1s, 3s). Підміняємо Math.random на трап і setTimeout на спостерігач.
 {
     const INITIAL_MAX_MS = 1500;
+    const LOCAL_STIR_MIN = 1_000;
+    const LOCAL_STIR_MAX = 3_000;
 
     const origMathRandom = Math.random;
     const origSetTimeout = globalThis.setTimeout;
@@ -284,28 +279,38 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
         assert.equal(
             mathRandomCalls,
             0,
-            `Math.random was called ${mathRandomCalls} time(s); PRNG-backed scheduler must not depend on it`,
+            `Math.random was called ${mathRandomCalls} time(s); PRNG-backed timers must not depend on it`,
         );
         assert.ok(
-            observedDelays.length >= 2,
-            `expected each VoidStream to schedule once; got ${observedDelays.length} setTimeout calls`,
+            observedDelays.length >= 4,
+            `expected network + local stir timers per instance; got ${observedDelays.length} setTimeout calls`,
         );
-        for (const d of observedDelays) {
-            assert.ok(
-                typeof d === "number" && d >= 0 && d < INITIAL_MAX_MS,
-                `initial scheduler delay ${d} ms must be in [0, ${INITIAL_MAX_MS}) — first fetch should be fast`,
-            );
-        }
+
+        const networkInitial = observedDelays.filter(
+            (d) => typeof d === "number" && d >= 0 && d < INITIAL_MAX_MS,
+        );
+        const localStir = observedDelays.filter(
+            (d) => typeof d === "number" && d >= LOCAL_STIR_MIN && d < LOCAL_STIR_MAX,
+        );
+
+        assert.ok(
+            networkInitial.length >= 2,
+            `expected initial network jitter per instance in [0, ${INITIAL_MAX_MS}); got ${JSON.stringify(observedDelays)}`,
+        );
+        assert.ok(
+            localStir.length >= 2,
+            `expected local idle-stir per instance in [${LOCAL_STIR_MIN}, ${LOCAL_STIR_MAX}); got ${JSON.stringify(observedDelays)}`,
+        );
         assert.notEqual(
-            observedDelays[0],
-            observedDelays[1],
-            "two independent VoidStream instances must pick different initial delays — otherwise PRNG isn't actually feeding the scheduler",
+            networkInitial[0],
+            networkInitial[1],
+            "two independent VoidStream instances must pick different initial network delays",
         );
     } finally {
         Math.random = origMathRandom;
         globalThis.setTimeout = origSetTimeout;
     }
-    console.log(`  ok  initial fetch is scheduled fast (jittered <1500ms) from voidstream pool`);
+    console.log(`  ok  network jitter (<1500ms) and local stir (1..3s) scheduled from pool`);
 }
 
 // Після першого tick-у при coverage < 50% наступна затримка — warmup
@@ -334,11 +339,11 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
     try {
         const s = new esm.VoidStream();
 
-        for (let i = 0; i < 200 && allDelays.length < 2; i++) {
+        for (let i = 0; i < 500 && (allDelays.length < 2 || s.coverage === 0); i++) {
             await Promise.resolve();
         }
-        if (allDelays.length < 2) {
-            await new Promise((r) => origSetTimeout(r, 50));
+        if (allDelays.length < 2 || s.coverage === 0) {
+            await new Promise((r) => origSetTimeout(r, 200));
         }
 
         const subsequent = allDelays.slice(1);
@@ -350,12 +355,12 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
             s.coverage > 0 && s.coverage < 0.5,
             `expected warmup coverage after one tick, got ${s.coverage}`,
         );
-        for (const d of subsequent) {
-            assert.ok(
-                typeof d === "number" && d >= WARMUP_MIN && d < WARMUP_MAX,
-                `warmup scheduler delay ${d} ms must be in [${WARMUP_MIN}, ${WARMUP_MAX}) while coverage < 50%`,
-            );
-        }
+        assert.ok(
+            subsequent.some(
+                (d) => typeof d === "number" && d >= WARMUP_MIN && d < WARMUP_MAX,
+            ),
+            `expected a network warmup delay in [${WARMUP_MIN}, ${WARMUP_MAX}); got ${JSON.stringify(subsequent)}`,
+        );
     } finally {
         globalThis.setTimeout = origSetTimeout;
         globalThis.fetch = origFetch;
@@ -395,6 +400,32 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
         globalThis.fetch = origFetch;
     }
     console.log(`  ok  undelivered sources prioritized until coverage >= 60%`);
+}
+
+// Локальний idle-stir: localContext → seedMix навіть коли мережа падає.
+{
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+        throw new Error("network disabled for local-stir test");
+    };
+
+    try {
+        const s = new esm.VoidStream();
+        assert.equal(s.coverage, 0, "coverage is 0 synchronously after construct");
+        await new Promise((r) => setTimeout(r, 2500));
+        assert.ok(
+            s.coverage > 0,
+            `local idle-stir should deliver localContext without network (got ${s.coverage})`,
+        );
+        // Лише localContext — 1 з 6 built-in джерел.
+        assert.ok(
+            s.coverage <= 1 / 6 + 0.01,
+            `with network down, coverage should stay at localContext only (got ${s.coverage})`,
+        );
+    } finally {
+        globalThis.fetch = origFetch;
+    }
+    console.log(`  ok  local idle-stir feeds pool when network fails`);
 }
 
 console.log("all good");

@@ -5,7 +5,8 @@ import {
     isBuiltinSource,
     type EntropySource,
 } from "./sources/index";
-import { concatBytes, encodeString, timingBytes, toHex } from "./utils";
+import { localContext } from "./sources/localContext";
+import { concatBytes, encodeString, timingBytes, toHex, unrefTimer } from "./utils";
 
 export type VecLen = 1 | 2 | 3 | 4;
 
@@ -56,6 +57,10 @@ const DELAY_MID_MAX_MS = 60_000;
 const DELAY_STEADY_MIN_MS = 5 * 60_000;
 const DELAY_STEADY_MAX_MS = 15 * 60_000;
 
+/** Локальний idle-stir: `localContext` + timing, без HTTP. */
+const LOCAL_STIR_MIN_MS = 1_000;
+const LOCAL_STIR_MAX_MS = 3_000;
+
 /**
  * VoidStream — фасад над пулом ентропії та PRNG.
  *
@@ -63,10 +68,10 @@ const DELAY_STEADY_MAX_MS = 15 * 60_000;
  *   1. Конструктор синхронно засіває пул локальною ентропією
  *      (`crypto.getRandomValues` + контекст середовища) і одразу
  *      запускає фоновий планувальник.
- *   2. У фоні пул довишивається з публічних джерел відкритих даних.
- *      Інтервал між refresh-ами адаптивний до coverage (частіше,
- *      поки < 50%; рідше від 60%). Список джерел назовні не
- *      повідомляється.
+ *   2. У фоні пул довишивається з публічних джерел відкритих даних
+ *      (scheduler) і паралельно з локального `localContext` (idle-stir
+ *      кожні 1..3 с, без мережі). Інтервал мережевих refresh-ів
+ *      адаптивний до coverage (частіше, поки < 50%; рідше від 60%).
  *   3. Усі методи отримання значень працюють синхронно над поточним
  *      станом PRNG.
  *   4. Жодного способу домішати дані в пул ззовні: тільки через
@@ -78,6 +83,7 @@ const DELAY_STEADY_MAX_MS = 15 * 60_000;
 export class VoidStream {
     private readonly prng = new Xoshiro128ss();
     private readonly scheduler: Scheduler;
+    private localStirTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Внутрішні лічильники для одноразових warn-ів. Жодне з цих полів
     // не доступне ззовні і не впливає на API.
@@ -124,6 +130,40 @@ export class VoidStream {
             pickSource: () => this.pickRefreshSource(),
         });
         this.scheduler.start();
+        this.startLocalStir();
+    }
+
+    /**
+     * Фоновий локальний stir: `localContext.fetch()` → `seedMix`.
+     * Працює паралельно з мережевим scheduler-ом, не викликає HTTP і
+     * свідомо не скидає `consecutiveFailures` — інакше успішний local
+     * stir маскував би серію мережевих невдач.
+     */
+    private startLocalStir(): void {
+        if (this.localStirTimer !== null) return;
+        this.scheduleLocalStir();
+    }
+
+    private scheduleLocalStir(): void {
+        const range = LOCAL_STIR_MAX_MS - LOCAL_STIR_MIN_MS;
+        const delay = LOCAL_STIR_MIN_MS + this.prng.nextUnit() * range;
+        this.localStirTimer = setTimeout(() => {
+            this.localStirTimer = null;
+            void this.localStirTick();
+        }, delay);
+        unrefTimer(this.localStirTimer);
+    }
+
+    private async localStirTick(): Promise<void> {
+        try {
+            const bytes = await localContext.fetch();
+            await this.prng.seedMix(bytes);
+            this.deliveredSources.add(localContext);
+        } catch {
+            // localContext у штатному середовищі не падає
+        } finally {
+            this.scheduleLocalStir();
+        }
     }
 
     /**
@@ -282,10 +322,9 @@ export class VoidStream {
      *
      * Інтерпретація:
      *   - `0`           — щойно після конструювання; пул живе лише
-     *                     на bootstrap-ентропії (`crypto.getRandomValues`
-     *                     + контекст середовища). Це безпечно для
-     *                     більшості use cases, але мережевий шум сюди
-     *                     ще не дотік.
+     *                     на bootstrap-ентропії. Локальний idle-stir
+     *                     (1..3 с) швидко додає `localContext`; coverage
+     *                     може стати > 0 ще до першого мережевого tick-у.
      *   - проміжне      — частина джерел доставила; планувальник частіше
      *                     tick-ає (2..10 с), поки coverage < 50%, і
      *                     пріоритезує ще не доставлені джерела, поки < 60%

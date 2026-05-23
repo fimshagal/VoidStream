@@ -171,12 +171,13 @@ A few things worth knowing:
 - The pool **always** starts at `0`. Bootstrap entropy from
   `crypto.getRandomValues` is not counted; coverage only tracks
   refreshes from sources.
-- The first network fetch is scheduled within ~1.5 seconds of constructing
-  the instance (small random jitter, not a fixed 5+ min wait). Until
-  coverage reaches 60%, the scheduler **prioritizes sources that have not
-  yet delivered** — so the bar does not sit at ~17% while `localContext`
-  keeps getting re-picked. After 60%, refreshes use the long 5..15 min
-  cadence (see *Refresh cadence*).
+- **Local idle-stir** mixes `localContext` every `[1s, 3s)` with no HTTP —
+  `coverage` can rise from local delivery before the first network tick.
+  The first network fetch is scheduled within ~1.5 seconds of constructing
+  the instance (small random jitter). Until coverage reaches 60%, the
+  network scheduler **prioritizes sources that have not yet delivered** —
+  so the bar does not stall on repeated `localContext` hits. After 60%,
+  network refreshes use the long 5..15 min cadence (see *Refresh cadence*).
 - Coverage is **monotonically non-decreasing** for the lifetime of the
   instance. It is "did this source ever deliver?", not "did it deliver
   recently?".
@@ -224,27 +225,37 @@ this repo does exactly that.
 
 ## Refresh cadence
 
-The scheduler runs entirely in the background and has no public API. Two
-things are worth knowing about its timing:
+Two independent background loops run with no public API:
+
+### Local idle-stir
+
+Every `[1s, 3s)` (drawn from the pool), VoidStream snapshots the built-in
+`localContext` source — passive user-input buffer + environment + timing —
+and mixes it into the PRNG via `seedMix`. **No HTTP.** This keeps the pool
+moving between slow network ticks and while the app is idle (no public API
+calls). Local stir does **not** reset the network failure counter, so stale
+network warnings still work.
+
+### Network scheduler
 
 - **First fetch is fast.** Right after `new VoidStream()`, the scheduler
   picks a small random delay in `[0, 1500ms)` and then triggers its first
-  refresh. Until that lands, the pool is running on `crypto.getRandomValues`
-  bootstrap + the always-on `localContext` source.
-- **Subsequent fetches adapt to coverage.** While the pool is still
+  network refresh. Until bootstrap + first stir land, the pool is mostly
+  local.
+- **Subsequent network fetches adapt to coverage.** While the pool is still
   warming up, the scheduler prefers sources that have **not** delivered yet
   (so coverage does not stall on repeated `localContext` hits) and uses
   shorter intervals:
 
-  | Coverage | Interval between ticks |
+  | Coverage | Network interval between ticks |
   | --- | --- |
   | `< 50%` | `[2s, 10s)` |
   | `50% .. 60%` | `[10s, 1min)` |
   | `≥ 60%` | `[5min, 15min)` — steady state |
 
   The steady-state floor (`5min`) keeps load on public APIs moderate.
-  Both delays and source picks are drawn from the voidstream pool itself
-  (via the PRNG), not from `Math.random`.
+  Delays, source picks, and local stir timing are drawn from the voidstream
+  pool itself (via the PRNG), not from `Math.random`.
 
 ## The local source
 
@@ -257,8 +268,13 @@ One of the built-in sources is non-network: it passively buffers `mousemove`,
 It is intentionally the **lowest-impact** source in the default set: it
 returns only tens of bytes per refresh while the network sources return
 hundreds-to-thousands. Since the PRNG mixes bytes proportionally to
-payload size, the local source feeds the pool gently — but it always
-feeds. Even fully offline, the pool keeps moving.
+payload size, the local source feeds the pool gently.
+
+Besides being eligible for the network scheduler's random picks, it is
+also pulled automatically on the **local idle-stir loop** every `[1s, 3s)`
+— so the pool keeps moving even when no network fetch is due and the app
+is not calling `bytes()` / `int()`. Even fully offline, the pool keeps
+moving.
 
 Privacy is preserved on purpose: only event *timing* is recorded for
 `keydown`. Pointer coordinates stay in memory and are never sent anywhere.
