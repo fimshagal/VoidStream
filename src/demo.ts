@@ -1,13 +1,13 @@
-import { Chaos } from "./index";
+import { VoidStream } from "./index";
 
 /**
  * Демо ловить тільки те, що ліба сама вирішує сказати назовні:
  *   - значення з її API;
- *   - повідомлення з console.warn префіксом "[chaos]".
+ *   - повідомлення з console.warn префіксом "[voidstream]".
  *
  * Жодна мережева подія, джерело чи розклад тут не відображаються —
  * така політика самої бібліотеки. Кнопка "show sample warning"
- * емітить синтетичний console.warn з префіксом "[chaos]", щоб
+ * емітить синтетичний console.warn з префіксом "[voidstream]", щоб
  * показати, як виглядають справжні warn-и у реальному житті
  * (через те що 5-хв floor планувальника робить ловіння реальних
  * warn-ів під час короткої демо-сесії малоймовірним).
@@ -16,6 +16,7 @@ import { Chaos } from "./index";
 const NOISE_COLS = 32;
 const NOISE_ROWS = 16;
 const AUTO_SHUFFLE_MS = 1500;
+const WARN_PREFIX = "[voidstream]";
 
 const $ = <T extends Element>(sel: string): T => {
     const el = document.querySelector<T>(sel);
@@ -34,7 +35,7 @@ const els = {
 
 // --- Перехоплювач console.warn ---------------------------------------
 //
-// Це робиться ДО створення Chaos, щоб не пропустити ранні попередження.
+// Це робиться ДО створення VoidStream, щоб не пропустити ранні попередження.
 
 interface LibMessage {
     time: number;
@@ -47,7 +48,7 @@ const ORIGINAL_WARN = console.warn.bind(console);
 
 console.warn = (...args: unknown[]): void => {
     const text = args.map(stringifyArg).join(" ");
-    if (text.startsWith("[chaos]")) {
+    if (text.startsWith(WARN_PREFIX)) {
         messages.unshift({ time: Date.now(), text });
         if (messages.length > MESSAGE_LIMIT) messages.length = MESSAGE_LIMIT;
         renderMessages();
@@ -66,7 +67,7 @@ function stringifyArg(a: unknown): string {
 
 // --- Основний інстанс ліби -------------------------------------------
 
-const chaos = new Chaos();
+const stream = new VoidStream();
 
 // --- API-плейграунд ---------------------------------------------------
 
@@ -81,58 +82,51 @@ function runOp(op: string): void {
         switch (op) {
             case "int":
                 label = "int()";
-                value = chaos.int();
+                value = stream.int();
                 break;
             case "int-range":
                 label = "int(0, 100)";
-                value = chaos.int(0, 100);
+                value = stream.int(0, 100);
                 break;
             case "unit":
                 label = "unit()";
-                value = chaos.unit();
+                value = stream.unit();
                 break;
             case "float":
                 label = "float(-10, 10)";
-                value = chaos.float(-10, 10);
+                value = stream.float(-10, 10);
                 break;
             case "bytes":
                 label = "bytes(16)";
-                value = chaos.bytes(16);
+                value = stream.bytes(16);
                 break;
             case "vec2i":
                 label = "intVec(2, 0, 256)";
-                value = chaos.intVec(2, 0, 256);
+                value = stream.intVec(2, 0, 256);
                 break;
             case "vec3f":
                 label = "floatVec(3, -1, 1)";
-                value = chaos.floatVec(3, -1, 1);
+                value = stream.floatVec(3, -1, 1);
                 break;
             case "vec4i":
                 label = "intVec(4, 0, 100)";
-                value = chaos.intVec(4, 0, 100);
+                value = stream.intVec(4, 0, 100);
                 break;
             case "mat2i":
                 label = "intMatrix(2, 2, 0, 9)";
-                value = chaos.intMatrix(2, 2, 0, 9);
+                value = stream.intMatrix(2, 2, 0, 9);
                 break;
             case "mat3f":
                 label = "floatMatrix(3, 3)";
-                value = chaos.floatMatrix(3, 3);
+                value = stream.floatMatrix(3, 3);
                 break;
             case "hash":
                 label = "hash()";
-                value = chaos.hash();
+                value = stream.hash();
                 break;
-            case "hashSalt": {
-                const salt = `salt-${Date.now()}`;
-                label = `hash({ salt: "${salt}" })`;
-                value = chaos.hash({ salt });
-                break;
-            }
-            case "mix":
-                chaos.mix(`user-${Date.now()}-${Math.random()}`);
-                label = "mix(\"user-...\")";
-                value = "(ok — user entropy mixed)";
+            case "hash-bytes":
+                label = "hash({ bytes: 16 })";
+                value = stream.hash({ bytes: 16 });
                 break;
             default:
                 value = "(unknown op)";
@@ -155,16 +149,16 @@ function showOutput(label: string, value: string): void {
 
 // --- Sample warning (демо-симуляція) ---------------------------------
 //
-// Реальний warn з [chaos] під час короткої демо-сесії побачити важко
+// Реальний warn з [voidstream] під час короткої демо-сесії побачити важко
 // (5-хв floor планувальника). Тому кнопка просто емітить синтетичний
 // console.warn з тим самим текстом, що використовує сама ліба —
 // перехоплювач вище ловить його так само, як ловив би справжній.
 
 const SAMPLE_WARNINGS = [
-    "[chaos] entropy refresh failed before any network source could be reached — pool is operating on local entropy only",
-    "[chaos] entropy refresh failed 3 times in a row — pool may be stale",
-    "[chaos] crypto.getRandomValues is unavailable; pool bootstrapped from timing only — entropy is weak",
-    `[chaos] custom entropy source "my-source" failed to refresh: HTTP 503 service unavailable`,
+    `${WARN_PREFIX} entropy refresh failed before any network source could be reached — pool is operating on local entropy only`,
+    `${WARN_PREFIX} entropy refresh failed 3 times in a row — pool may be stale`,
+    `${WARN_PREFIX} crypto.getRandomValues is unavailable; pool bootstrapped from timing only — entropy is weak`,
+    `${WARN_PREFIX} custom entropy source "my-source" failed to refresh: HTTP 503 service unavailable`,
 ];
 
 let sampleIdx = 0;
@@ -233,7 +227,7 @@ function buildNoiseGrid(): void {
 function shuffleNoise(): void {
     // Один bytes() запит вистачає для всієї сітки — ефективніше за
     // окремі int() виклики на кожну клітинку.
-    const bytes = chaos.bytes(cells.length * 3);
+    const bytes = stream.bytes(cells.length * 3);
     for (let i = 0; i < cells.length; i++) {
         const r = bytes[i * 3] ?? 0;
         const g = bytes[i * 3 + 1] ?? 0;

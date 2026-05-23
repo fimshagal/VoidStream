@@ -88,7 +88,7 @@ const LIGHT_OPTIONS = {
 
 function obfuscateRenderedChunks(): Plugin {
     return {
-        name: "chaos:obfuscate-rendered-chunks",
+        name: "voidstream:obfuscate-rendered-chunks",
         apply: "build",
         enforce: "post",
         renderChunk(code, _chunk, outputOpts) {
@@ -103,9 +103,9 @@ function obfuscateRenderedChunks(): Plugin {
 /**
  * Конфіг для збірки бібліотеки (без index.html демо).
  * Видає три формати:
- *   - ESM     (chaos.js)        — для bundler-ів і сучасного Node
- *   - CJS     (chaos.cjs)       — для застарілого Node / CommonJS
- *   - UMD     (chaos.umd.cjs)   — для прямого підключення через <script>
+ *   - ESM     (voidstream.js)        — для bundler-ів і сучасного Node
+ *   - CJS     (voidstream.cjs)       — для застарілого Node / CommonJS
+ *   - UMD     (voidstream.umd.cjs)   — для прямого підключення через <script>
  *
  * Усі три прогоняються через javascript-obfuscator (див.
  * obfuscateRenderedChunks вище). Sourcemaps вимкнені свідомо —
@@ -130,21 +130,21 @@ export default defineConfig({
         minify: "esbuild",
         lib: {
             entry: "src/index.ts",
-            name: "Chaos",
+            name: "VoidStream",
             formats: ["es", "cjs", "umd"],
             fileName: (format) => {
                 switch (format) {
                     case "es":
-                        return "chaos.js";
+                        return "voidstream.js";
                     case "cjs":
-                        return "chaos.cjs";
+                        return "voidstream.cjs";
                     case "umd":
                         // .cjs щоб Node трактував UMD як CommonJS, попри
                         // "type": "module" у package.json. Браузерам/CDN
                         // байдуже до розширення — UMD-стандарт лишається.
-                        return "chaos.umd.cjs";
+                        return "voidstream.umd.cjs";
                     default:
-                        return `chaos.${format}.js`;
+                        return `voidstream.${format}.js`;
                 }
             },
         },

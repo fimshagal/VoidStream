@@ -10,7 +10,7 @@ import { concatBytes, encodeString, timingBytes, toHex } from "./utils";
 export type VecLen = 1 | 2 | 3 | 4;
 
 /**
- * Параметри Chaos.
+ * Параметри VoidStream.
  *
  * Свідомо мінімальні. ЄДИНЕ, що можна додавати — це власні джерела
  * ентропії ПОВЕРХ стандартного набору. Вимкнути дефолтні джерела
@@ -20,11 +20,14 @@ export type VecLen = 1 | 2 | 3 | 4;
  *
  * Тайминги планувальника, інтервали, затримки, колбеки, прапорці
  * auto-start, ручки життєвого циклу — все це навмисно ВІДСУТНЄ і
- * є внутрішньою деталлю реалізації. Єдиний канал назовні, крім
- * випадкових значень — `console.warn` з префіксом `[chaos]`, коли
- * пул не вдається оновити.
+ * є внутрішньою деталлю реалізації. Так само свідомо НЕМАЄ методу
+ * для домішування довільних даних у пул ззовні: жодного `mix()`,
+ * `feed()`, `seed()` після конструктора. Єдиний канал входу — це
+ * джерела (вбудовані + ваші кастомні, додані під час `new VoidStream(...)`).
+ * Єдиний канал виходу, крім випадкових значень — `console.warn`
+ * з префіксом `[voidstream]`, коли пул не вдається оновити.
  */
-export interface ChaosOptions {
+export interface VoidStreamOptions {
     /**
      * Додаткові кастомні джерела, які потрапляють у пул паралельно
      * з вбудованими. Не замінює і не вимикає дефолтні — лише
@@ -38,7 +41,7 @@ export interface ChaosOptions {
 const REPEATED_FAILURE_THRESHOLD = 3;
 
 /**
- * Chaos — фасад над пулом ентропії та PRNG.
+ * VoidStream — фасад над пулом ентропії та PRNG.
  *
  * Контракт:
  *   1. Конструктор синхронно засіває пул локальною ентропією
@@ -49,11 +52,13 @@ const REPEATED_FAILURE_THRESHOLD = 3;
  *      не повідомляються.
  *   3. Усі методи отримання значень працюють синхронно над поточним
  *      станом PRNG.
- *   4. Якщо щось іде не так — лише `console.warn` з префіксом
- *      `[chaos]`. Жодного публічного способу зупинити, перевірити
- *      або форсувати оновлення немає.
+ *   4. Жодного способу домішати дані в пул ззовні: тільки через
+ *      власні джерела, передані під час конструювання.
+ *   5. Якщо щось іде не так — лише `console.warn` з префіксом
+ *      `[voidstream]`. Жодного публічного способу зупинити,
+ *      перевірити або форсувати оновлення немає.
  */
-export class Chaos {
+export class VoidStream {
     private readonly prng = new Xoshiro128ss();
     private readonly scheduler: Scheduler;
 
@@ -65,7 +70,7 @@ export class Chaos {
     private warnedAboutRepeatedFailure = false;
     private warnedAboutWeakBootstrap = false;
 
-    constructor(opts: ChaosOptions = {}) {
+    constructor(opts: VoidStreamOptions = {}) {
         this.bootstrap();
         // Дефолтні джерела завжди йдуть першими і завжди присутні.
         // Кастомні (якщо є) додаються поверх — споживач НЕ може ні
@@ -77,6 +82,15 @@ export class Chaos {
             sources: [...defaultSources(), ...customSources],
             onEntropy: (bytes) => this.handleRefreshSuccess(bytes),
             onError: (err, source) => this.handleRefreshFailure(err, source),
+            // Самообслуговування ліби тягнеться з її ж пулу. До цього
+            // моменту PRNG уже засіяний у bootstrap() з crypto.getRandomValues
+            // (плюс контекст середовища і timing), тому навіть найперший
+            // nextUnit() уже криптографічно сильний. Підмішування у стан
+            // на кожен tick робить наступні рішення планувальника
+            // функцією від щойно зібраної мережевої ентропії — тобто
+            // спостерігач, який не бачив тих байтів, не може відновити
+            // момент наступного оновлення.
+            random: () => this.prng.nextUnit(),
         });
         this.scheduler.start();
     }
@@ -102,7 +116,7 @@ export class Chaos {
 
         if (!usedStrongSource && !this.warnedAboutWeakBootstrap) {
             console.warn(
-                "[chaos] crypto.getRandomValues is unavailable; pool bootstrapped from timing only — entropy is weak",
+                "[voidstream] crypto.getRandomValues is unavailable; pool bootstrapped from timing only — entropy is weak",
             );
             this.warnedAboutWeakBootstrap = true;
         }
@@ -148,7 +162,7 @@ export class Chaos {
         if (!isBuiltinSource(source)) {
             const reason = err instanceof Error ? err.message : String(err);
             console.warn(
-                `[chaos] custom entropy source "${source.name}" failed to refresh: ${reason}`,
+                `[voidstream] custom entropy source "${source.name}" failed to refresh: ${reason}`,
             );
             return;
         }
@@ -158,7 +172,7 @@ export class Chaos {
 
         if (!this.everSucceeded && !this.warnedAboutInitialFailure) {
             console.warn(
-                "[chaos] entropy refresh failed before any network source could be reached — pool is operating on local entropy only",
+                "[voidstream] entropy refresh failed before any network source could be reached — pool is operating on local entropy only",
             );
             this.warnedAboutInitialFailure = true;
             return;
@@ -169,19 +183,20 @@ export class Chaos {
             !this.warnedAboutRepeatedFailure
         ) {
             console.warn(
-                `[chaos] entropy refresh failed ${this.consecutiveFailures} times in a row — pool may be stale`,
+                `[voidstream] entropy refresh failed ${this.consecutiveFailures} times in a row — pool may be stale`,
             );
             this.warnedAboutRepeatedFailure = true;
         }
     }
 
     // --- Публічний API: тільки те, що виробляє значення ---------------
-
-    /** Влити власну ентропію (наприклад, користувацький salt). */
-    mix(data: string | Uint8Array): void {
-        const bytes = typeof data === "string" ? encodeString(data) : data;
-        this.prng.seed(bytes);
-    }
+    //
+    // Свідомо НЕ маємо тут жодного методу для домішування даних у пул
+    // ззовні (`mix`, `feed`, `seed` тощо). Єдиний легальний шлях
+    // підкинути власну ентропію — це передати кастомне джерело під
+    // час `new VoidStream({ sources: [...] })`. Так само свідомо
+    // прибрали `salt` з `hash()` — раніше salt домішувався в PRNG,
+    // що було еквівалентно `mix()`.
 
     /** N сирих байтів. */
     bytes(n: number): Uint8Array {
@@ -261,16 +276,15 @@ export class Chaos {
     }
 
     /**
-     * Hex-хеш, побудований із поточного пулу ентропії.
-     * Якщо передати `salt`, він заздалегідь вливається у стан PRNG —
-     * це робить вихід функцією від (поточний шум, salt).
+     * Hex-хеш, побудований із поточного пулу ентропії. Чистий read-only
+     * снімок — не змінює пул нічим, окрім стандартного просування
+     * PRNG-стану на `bytes` байтів (як будь-який інший draw).
      */
-    hash(opts: { bytes?: number; salt?: string } = {}): string {
+    hash(opts: { bytes?: number } = {}): string {
         const len = opts.bytes ?? 32;
         if (!Number.isInteger(len) || len <= 0) {
             throw new RangeError("hash({bytes}): bytes must be a positive integer");
         }
-        if (opts.salt) this.mix(opts.salt);
         return toHex(this.prng.nextBytes(len));
     }
 }

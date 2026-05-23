@@ -1,10 +1,10 @@
 // Публічний фасад ліби.
 //
 // Що тут є:
-//   - `Chaos` — клас, що виробляє випадкові значення;
-//   - `ChaosOptions` / `VecLen` — типи для конструктора і вектор-методів;
+//   - `VoidStream` — клас, що виробляє випадкові значення;
+//   - `VoidStreamOptions` / `VecLen` — типи для конструктора і вектор-методів;
 //   - `EntropySource` — інтерфейс для тих, хто хоче ДОДАТИ власне
-//     джерело поверх вбудованих (через ChaosOptions.sources).
+//     джерело поверх вбудованих (через VoidStreamOptions.sources).
 //
 // Чого тут СВІДОМО нема:
 //   - `defaultSources()` — раніше експортувалось, щоб юзер міг
@@ -17,8 +17,11 @@
 //   - окремих імен вбудованих джерел (coingecko/github/usgs/...);
 //   - типів статистики, подій чи колбеків — ліба не сигналізує про
 //     мережеву активність наружу, тільки через `console.warn` з
-//     префіксом `[chaos]`.
+//     префіксом `[voidstream]`;
+//   - жодного публічного шляху домішати дані у пул ззовні (`mix`,
+//     `feed`, `seed`): ентропія входить лише через джерела, причому
+//     лише ті, що зареєстровані у момент конструювання.
 
-export { Chaos } from "./chaos";
-export type { ChaosOptions, VecLen } from "./chaos";
+export { VoidStream } from "./voidstream";
+export type { VoidStreamOptions, VecLen } from "./voidstream";
 export type { EntropySource } from "./sources/types";

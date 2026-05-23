@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>chaos — black-box entropy</title>
+    <title>voidstream — black-box entropy</title>
     <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
     <header class="page-head">
-        <h1>chaos</h1>
+        <h1>voidstream</h1>
         <p class="tagline">black-box entropy from open data — randomness with provenance</p>
     </header>
 
@@ -27,8 +27,7 @@
                 <button data-op="mat2i">intMatrix(2, 2, 0, 9)</button>
                 <button data-op="mat3f">floatMatrix(3, 3)</button>
                 <button data-op="hash">hash()</button>
-                <button data-op="hashSalt">hash({ salt })</button>
-                <button data-op="mix">mix("...")</button>
+                <button data-op="hash-bytes">hash({ bytes: 16 })</button>
             </div>
             <pre id="output" class="output">click any button to draw a value</pre>
         </section>
@@ -40,9 +39,10 @@
                 <span class="status-label">running silently</span>
             </div>
             <p class="hint">
-                once constructed, <code>Chaos</code> refreshes its own pool in
-                the background forever. there is no stop, no isRunning, no pull
-                — by design.
+                once constructed, <code>VoidStream</code> refreshes its own pool
+                in the background forever. there is no stop, no isRunning, no
+                pull, no <code>mix()</code> — by design. ingress only happens
+                through sources passed at construction.
             </p>
             <div class="messages-head">messages</div>
             <ol id="messages" class="messages">
@@ -54,7 +54,7 @@
                 or how often — that is on purpose.
             </p>
             <div class="controls compact">
-                <button id="btn-sample-warning" type="button" title="emit a synthetic [chaos] warning to preview what consumers would see">show sample warning</button>
+                <button id="btn-sample-warning" type="button" title="emit a synthetic [voidstream] warning to preview what consumers would see">show sample warning</button>
             </div>
         </section>
 

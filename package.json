@@ -1,20 +1,20 @@
 {
-  "name": "entropy-chaos",
+  "name": "voidstream",
   "private": true,
   "version": "0.1.0",
-  "description": "Real-noise entropy library powered by open data sources (NASA, USGS, etc.)",
+  "description": "Black-box entropy library powered by open data sources (NASA, USGS, etc.) and local context.",
   "type": "module",
-  "main": "./dist/lib/chaos.cjs",
-  "module": "./dist/lib/chaos.js",
+  "main": "./dist/lib/voidstream.cjs",
+  "module": "./dist/lib/voidstream.js",
   "types": "./dist/lib/types/index.d.ts",
-  "unpkg": "./dist/lib/chaos.umd.cjs",
-  "jsdelivr": "./dist/lib/chaos.umd.cjs",
+  "unpkg": "./dist/lib/voidstream.umd.cjs",
+  "jsdelivr": "./dist/lib/voidstream.umd.cjs",
   "exports": {
     ".": {
       "types": "./dist/lib/types/index.d.ts",
-      "import": "./dist/lib/chaos.js",
-      "require": "./dist/lib/chaos.cjs",
-      "default": "./dist/lib/chaos.js"
+      "import": "./dist/lib/voidstream.js",
+      "require": "./dist/lib/voidstream.cjs",
+      "default": "./dist/lib/voidstream.js"
     },
     "./package.json": "./package.json"
   },

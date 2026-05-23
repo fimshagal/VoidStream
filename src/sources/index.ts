@@ -8,7 +8,7 @@ import { usgsEarthquakes } from "./usgs";
 
 /**
  * Built-in джерела зберігаємо як module-level singleton-и і реєструємо
- * їхні референси у WeakSet. Це дає змогу за O(1) у Chaos з'ясувати,
+ * їхні референси у WeakSet. Це дає змогу за O(1) у VoidStream з'ясувати,
  * чи прийшов source від нас, чи від користувача — БЕЗ модифікації
  * самих source-об'єктів (жодних маркер-полів типу `__builtin: true`,
  * жодних брендованих типів у `EntropySource` — щоб імплементори
@@ -29,8 +29,9 @@ const BUILTIN_SET = new WeakSet<EntropySource>();
 for (const s of BUILTIN_SOURCES) BUILTIN_SET.add(s);
 
 /**
- * Дефолтний набір джерел. Можна замінювати свій список через ChaosOptions.sources,
- * або просто додавати свої реалізації EntropySource поряд із цими.
+ * Дефолтний набір джерел. Завжди активний — споживач не може його ні
+ * вимкнути, ні замінити; через `VoidStreamOptions.sources` йдуть лише
+ * додаткові кастомні джерела, які мерджаться поверх цього набору.
  */
 export function defaultSources(): EntropySource[] {
     return [...BUILTIN_SOURCES];
@@ -40,7 +41,7 @@ export function defaultSources(): EntropySource[] {
  * Внутрішній хелпер: повертає true, якщо `source` — це один із наших
  * вбудованих об'єктів (порівняння за reference через WeakSet).
  * Свідомо не експортується з публічного `src/index.ts` — потрібно
- * лише `Chaos`, щоб розрізняти, як трактувати помилку refresh-у.
+ * лише `VoidStream`, щоб розрізняти, як трактувати помилку refresh-у.
  */
 export function isBuiltinSource(source: EntropySource): boolean {
     return BUILTIN_SET.has(source);
