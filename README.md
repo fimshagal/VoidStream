@@ -172,8 +172,11 @@ A few things worth knowing:
   `crypto.getRandomValues` is not counted; coverage only tracks
   refreshes from sources.
 - The first network fetch is scheduled within ~1.5 seconds of constructing
-  the instance (small random jitter, not a fixed 5+ min wait). After that,
-  refreshes settle into the long 5..15 min cadence.
+  the instance (small random jitter, not a fixed 5+ min wait). Until
+  coverage reaches 60%, the scheduler **prioritizes sources that have not
+  yet delivered** — so the bar does not sit at ~17% while `localContext`
+  keeps getting re-picked. After 60%, refreshes use the long 5..15 min
+  cadence (see *Refresh cadence*).
 - Coverage is **monotonically non-decreasing** for the lifetime of the
   instance. It is "did this source ever deliver?", not "did it deliver
   recently?".
@@ -228,15 +231,20 @@ things are worth knowing about its timing:
   picks a small random delay in `[0, 1500ms)` and then triggers its first
   refresh. Until that lands, the pool is running on `crypto.getRandomValues`
   bootstrap + the always-on `localContext` source.
-- **Subsequent fetches are slow and jittered.** Every following refresh
-  is scheduled randomly in `[5min, 15min)`. This is a hard floor: the
-  library will not hammer the public APIs faster than this, regardless
-  of how many sources you add.
+- **Subsequent fetches adapt to coverage.** While the pool is still
+  warming up, the scheduler prefers sources that have **not** delivered yet
+  (so coverage does not stall on repeated `localContext` hits) and uses
+  shorter intervals:
 
-Both delays are drawn from the `voidstream` pool itself (via the
-PRNG), not from `Math.random`. That means an external observer who knows
-the moment you constructed the instance still cannot predict when the
-next refresh lands.
+  | Coverage | Interval between ticks |
+  | --- | --- |
+  | `< 50%` | `[2s, 10s)` |
+  | `50% .. 60%` | `[10s, 1min)` |
+  | `≥ 60%` | `[5min, 15min)` — steady state |
+
+  The steady-state floor (`5min`) keeps load on public APIs moderate.
+  Both delays and source picks are drawn from the voidstream pool itself
+  (via the PRNG), not from `Math.random`.
 
 ## The local source
 

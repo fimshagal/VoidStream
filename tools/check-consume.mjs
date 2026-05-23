@@ -308,21 +308,11 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
     console.log(`  ok  initial fetch is scheduled fast (jittered <1500ms) from voidstream pool`);
 }
 
-// Доводимо ДВІ важливі властивості разом:
-//   (1) після першого реального tick-у наступна затримка вже довга
-//       (5..15 хв) — штатний інтервал підтримки пулу;
-//   (2) coverage реагує на успішну доставку байтів — значення > 0.
-//
-// Хитрощі:
-//   - підставляємо setTimeout, що ВИКОНУЄ першу заплановану функцію
-//     одразу (через мікротаску), а подальші лише фіксує — інакше
-//     потрапимо у рекурсію планування;
-//   - стабимо глобальний fetch порожньою OK-відповіддю, щоб built-in
-//     HTTP-джерела не зачіпали реальну мережу під час тесту, який би
-//     pickSource не обрав.
+// Після першого tick-у при coverage < 50% наступна затримка — warmup
+// (2..10 с), не довгий steady-інтервал.
 {
-    const FIVE_MIN = 5 * 60 * 1000;
-    const FIFTEEN_MIN = 15 * 60 * 1000;
+    const WARMUP_MIN = 2_000;
+    const WARMUP_MAX = 10_000;
 
     const origSetTimeout = globalThis.setTimeout;
     const origFetch = globalThis.fetch;
@@ -334,7 +324,7 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
         if (!firedFirst) {
             firedFirst = true;
             queueMicrotask(() => {
-                try { fn(); } catch { /* swallow — тест перевіряє планування, не tick body */ }
+                try { fn(); } catch { /* swallow */ }
             });
         }
         return { unref() {} };
@@ -344,8 +334,6 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
     try {
         const s = new esm.VoidStream();
 
-        // tick() async (fetch + SHA-256 seedMix). Чекаємо, поки finally
-        // scheduleIn(randomDelay()) запише другу затримку.
         for (let i = 0; i < 200 && allDelays.length < 2; i++) {
             await Promise.resolve();
         }
@@ -358,25 +346,55 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
             subsequent.length >= 1,
             `expected scheduler to plan at least one follow-up tick; got delays ${JSON.stringify(allDelays)}`,
         );
+        assert.ok(
+            s.coverage > 0 && s.coverage < 0.5,
+            `expected warmup coverage after one tick, got ${s.coverage}`,
+        );
         for (const d of subsequent) {
             assert.ok(
-                typeof d === "number" && d >= FIVE_MIN && d < FIFTEEN_MIN,
-                `subsequent scheduler delay ${d} ms must be in [${FIVE_MIN}, ${FIFTEEN_MIN}) — long-term refresh interval`,
+                typeof d === "number" && d >= WARMUP_MIN && d < WARMUP_MAX,
+                `warmup scheduler delay ${d} ms must be in [${WARMUP_MIN}, ${WARMUP_MAX}) while coverage < 50%`,
             );
         }
-
-        // Coverage має зрости від 0 — одне з джерел (мережеве або
-        // localContext) повернуло байти.
-        assert.ok(
-            s.coverage > 0,
-            `coverage must increase after a successful tick, got ${s.coverage}`,
-        );
-        assert.ok(s.coverage <= 1, `coverage must be <= 1, got ${s.coverage}`);
     } finally {
         globalThis.setTimeout = origSetTimeout;
         globalThis.fetch = origFetch;
     }
-    console.log(`  ok  subsequent ticks use 5..15 min interval; coverage tracks deliveries`);
+    console.log(`  ok  warmup interval (2..10s) while coverage < 50%`);
+}
+
+// Поки coverage < 60% планувальник тягне лише з ще не доставлених
+// джерел — не застрягає на повторному localContext (~17%).
+{
+    const origSetTimeout = globalThis.setTimeout;
+    const origFetch = globalThis.fetch;
+
+    globalThis.setTimeout = (fn, _ms) => {
+        queueMicrotask(() => {
+            try { fn(); } catch { /* swallow */ }
+        });
+        return { unref() {} };
+    };
+    globalThis.fetch = async () => new Response("stub-" + Date.now(), { status: 200 });
+
+    try {
+        const s = new esm.VoidStream();
+        // 6 built-in sources; localContext не використовує fetch. Даємо
+        // час на кілька послідовних tick-ів (async fetch + seedMix).
+        for (let i = 0; i < 400; i++) {
+            await Promise.resolve();
+        }
+        await new Promise((r) => origSetTimeout(r, 100));
+
+        assert.ok(
+            s.coverage >= 0.6,
+            `expected coverage >= 60% after probing undelivered sources (got ${s.coverage})`,
+        );
+    } finally {
+        globalThis.setTimeout = origSetTimeout;
+        globalThis.fetch = origFetch;
+    }
+    console.log(`  ok  undelivered sources prioritized until coverage >= 60%`);
 }
 
 console.log("all good");

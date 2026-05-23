@@ -40,6 +40,22 @@ export interface VoidStreamOptions {
 /** Скільки невдач підряд тригерять console.warn про "stale pool". */
 const REPEATED_FAILURE_THRESHOLD = 3;
 
+/** Пороги coverage для адаптивного інтервалу refresh-у. */
+const COVERAGE_WARMUP_BELOW = 0.5;
+const COVERAGE_STEADY_ABOVE = 0.6;
+
+/** Поки coverage < 50% — часті tick-и для швидкого наповнення пулу. */
+const DELAY_WARMUP_MIN_MS = 2_000;
+const DELAY_WARMUP_MAX_MS = 10_000;
+
+/** Перехід 50–60% — помірне уповільнення. */
+const DELAY_MID_MIN_MS = 10_000;
+const DELAY_MID_MAX_MS = 60_000;
+
+/** coverage ≥ 60% — штатний довгий режим. */
+const DELAY_STEADY_MIN_MS = 5 * 60_000;
+const DELAY_STEADY_MAX_MS = 15 * 60_000;
+
 /**
  * VoidStream — фасад над пулом ентропії та PRNG.
  *
@@ -47,9 +63,10 @@ const REPEATED_FAILURE_THRESHOLD = 3;
  *   1. Конструктор синхронно засіває пул локальною ентропією
  *      (`crypto.getRandomValues` + контекст середовища) і одразу
  *      запускає фоновий планувальник.
- *   2. У фоні раз на 5..15 хв пул довишивається з кількох публічних
- *      джерел відкритих даних. Список джерел і таймінги назовні
- *      не повідомляються.
+ *   2. У фоні пул довишивається з публічних джерел відкритих даних.
+ *      Інтервал між refresh-ами адаптивний до coverage (частіше,
+ *      поки < 50%; рідше від 60%). Список джерел назовні не
+ *      повідомляється.
  *   3. Усі методи отримання значень працюють синхронно над поточним
  *      станом PRNG.
  *   4. Жодного способу домішати дані в пул ззовні: тільки через
@@ -76,6 +93,8 @@ export class VoidStream {
     // `.size`, а Set<EntropySource> працює за reference (source-об'єкти
     // — модульні singleton-и, тому ідентичність стабільна).
     private readonly deliveredSources = new Set<EntropySource>();
+    /** Усі джерела пулу (default + custom) — той самий список, що й у Scheduler. */
+    private readonly sources: EntropySource[];
     private readonly totalSourcesCount: number;
 
     constructor(opts: VoidStreamOptions = {}) {
@@ -86,10 +105,10 @@ export class VoidStream {
         // black-box-моделі: пул завжди харчується з відомого нам
         // набору; ззовні можна лише розширювати.
         const customSources = opts.sources ?? [];
-        const allSources = [...defaultSources(), ...customSources];
-        this.totalSourcesCount = allSources.length;
+        this.sources = [...defaultSources(), ...customSources];
+        this.totalSourcesCount = this.sources.length;
         this.scheduler = new Scheduler({
-            sources: allSources,
+            sources: this.sources,
             onEntropy: (bytes, source) => this.handleRefreshSuccess(bytes, source),
             onError: (err, source) => this.handleRefreshFailure(err, source),
             // Самообслуговування ліби тягнеться з її ж пулу. До цього
@@ -101,8 +120,53 @@ export class VoidStream {
             // спостерігач, який не бачив тих байтів, не може відновити
             // момент наступного оновлення.
             random: () => this.prng.nextUnit(),
+            nextDelayMs: () => this.scheduleDelayMs(),
+            pickSource: () => this.pickRefreshSource(),
         });
         this.scheduler.start();
+    }
+
+    /**
+     * Поки coverage < 60% — тягнемо лише з джерел, що ще не доставляли
+     * байти. Інакше випадковий pick часто повторює localContext (завжди
+     * OK) і пул довго сидить на ~17%, без warn-ів (успіх скидає лічильник
+     * невдач). Після досягнення порогу — звичайний random по всьому списку.
+     */
+    private pickRefreshSource(): EntropySource {
+        if (this.coverage < COVERAGE_STEADY_ABOVE) {
+            const pending = this.sources.filter((s) => !this.deliveredSources.has(s));
+            if (pending.length > 0) {
+                const idx = Math.floor(this.prng.nextUnit() * pending.length);
+                return pending[idx]!;
+            }
+        }
+        const idx = Math.floor(this.prng.nextUnit() * this.sources.length);
+        return this.sources[idx]!;
+    }
+
+    /**
+     * Інтервал до наступного фонового fetch-у залежно від coverage.
+     * Перший tick планувальник ставить окремо (cold-start jitter).
+     *
+     *   coverage < 50%  → 2..10 с
+     *   50% ≤ c < 60%   → 10 с..1 хв
+     *   coverage ≥ 60%  → 5..15 хв
+     */
+    private scheduleDelayMs(): number {
+        const c = this.coverage;
+        let minMs: number;
+        let maxMs: number;
+        if (c < COVERAGE_WARMUP_BELOW) {
+            minMs = DELAY_WARMUP_MIN_MS;
+            maxMs = DELAY_WARMUP_MAX_MS;
+        } else if (c < COVERAGE_STEADY_ABOVE) {
+            minMs = DELAY_MID_MIN_MS;
+            maxMs = DELAY_MID_MAX_MS;
+        } else {
+            minMs = DELAY_STEADY_MIN_MS;
+            maxMs = DELAY_STEADY_MAX_MS;
+        }
+        return minMs + this.prng.nextUnit() * (maxMs - minMs);
     }
 
     // --- Bootstrap і прийом ентропії (приватні) -----------------------
@@ -222,11 +286,11 @@ export class VoidStream {
      *                     + контекст середовища). Це безпечно для
      *                     більшості use cases, але мережевий шум сюди
      *                     ще не дотік.
-     *   - проміжне      — частина джерел доставила, інші ще ні
-     *                     (зазвичай через мережеві помилки чи
-     *                     5..15-хв ритм планувальника).
-     *   - наближається до `1` — пул отримав ентропію з усіх відомих
-     *                     йому джерел і живе на повну ширину.
+     *   - проміжне      — частина джерел доставила; планувальник частіше
+     *                     tick-ає (2..10 с), поки coverage < 50%, і
+     *                     пріоритезує ще не доставлені джерела, поки < 60%
+     *   - наближається до `1` — усі джерела доставили; перехід на
+     *                     рідкий режим 5..15 хв (від coverage ≥ 60%)
      *
      * Що це НЕ є:
      *   - не "скільки байт у пулі" (xoshiro має фіксований 128-бітний

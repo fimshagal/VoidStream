@@ -18,8 +18,19 @@ export interface SchedulerOptions {
      * на безкоштовні API та робить тік-моменти "розкиданими".
      */
     minIntervalMs?: number;
-    /** Верхня межа інтервалу між викликами (мс). */
+    /** Верхня межа інтервалу між викликами (мс). Fallback, якщо `nextDelayMs` не задано. */
     maxIntervalMs?: number;
+    /**
+     * Затримка до наступного tick-у (мс). VoidStream передає coverage-aware
+     * логіку: поки пул наповнюється — частіше, коли coverage ≥ 60% — рідше.
+     */
+    nextDelayMs?: () => number;
+    /**
+     * Яке джерело тягнути цього tick-у. VoidStream під час низького
+     * coverage пріоритезує ще не доставлені джерела, щоб швидше
+     * наповнити пул; інакше — випадковий вибір з усього списку.
+     */
+    pickSource?: () => EntropySource;
     /**
      * Джерело випадковості для ВНУТРІШНІХ рішень планувальника:
      *   - скільки чекати до наступного fetch-у,
@@ -66,12 +77,9 @@ function unrefTimer(t: ReturnType<typeof setTimeout>): void {
 
 /**
  * Фоновий планувальник:
- *   - перший fetch  — через невелику випадкову jitter-затримку
- *     [0, INITIAL_JITTER_MAX_MS), щоб пул отримав справжню мережеву
- *     ентропію якомога швидше;
- *   - подальші tick-и — раз на ~5..15 хв, теж випадково в межах вікна,
- *     щоб не вантажити безкоштовні API і не давати спостерігачеві
- *     передбачуваних моментів.
+ *   - перший fetch  — [0, INITIAL_JITTER_MAX_MS);
+ *   - подальші tick-и — через `nextDelayMs()` (coverage-aware) або
+ *     fallback randomDelay() у [5min, 15min).
  *
  * Не має публічного API — VoidStream створює його у конструкторі і
  * ніколи не зупиняє.
@@ -143,7 +151,7 @@ export class Scheduler {
     private async tick(): Promise<void> {
         if (this.inflight) return;
         this.inflight = true;
-        const src = this.pickSource();
+        const src = this.opts.pickSource?.() ?? this.pickSource();
         try {
             const bytes = await src.fetch();
             await this.opts.onEntropy(bytes, src);
@@ -151,7 +159,8 @@ export class Scheduler {
             this.opts.onError?.(err, src);
         } finally {
             this.inflight = false;
-            this.scheduleIn(this.randomDelay());
+            const delay = this.opts.nextDelayMs?.() ?? this.randomDelay();
+            this.scheduleIn(delay);
         }
     }
 
