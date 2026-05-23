@@ -59,8 +59,14 @@ stream.floatVec(4, -1, 1);     // 4 floats in [-1, 1)
 stream.intMatrix(3, 3);        // 3x3 ints
 stream.floatMatrix(2, 4);      // 2x4 floats
 
+stream.pick(["a", "b", "c"]);  // uniform random element
+stream.chance(0.25);           // boolean, p = 0.25
+stream.shuffle([1, 2, 3, 4]);  // new shuffled copy (Fisher–Yates)
+
 stream.hash();                 // 64-char hex string (32 random bytes)
 stream.hash({ bytes: 16 });    // 32-char hex string (16 random bytes)
+
+stream.coverage;               // 0..1 — share of sources that have delivered
 ```
 
 That is the **entire** public surface. There is no `start()`, `stop()`,
@@ -74,6 +80,102 @@ If you need to combine the lib's randomness with your own salt/identifier,
 do it *after* drawing — e.g. derive your own salted hash from
 `stream.bytes(n)` plus your data. The pool itself is intentionally
 unreachable from the outside.
+
+## Threat model — what this library is (and isn't) for
+
+`voidstream` is a **non-cryptographic** entropy library. It is built for
+the parts of an application where you want randomness that is unpredictable
+*in practice*, varied, and ergonomic to draw — but where an actively
+malicious adversary trying to reconstruct your numbers is **not** in scope.
+
+### Use it for
+
+- Procedural generation, generative art, demos, animations
+- Game mechanics that don't determine real-world money or fairness claims
+- Simulations, Monte Carlo runs, fuzzing inputs
+- UI shuffles, randomized order of items, decorative noise
+- "Living" randomness that draws on real-world signals for character
+
+### Do **not** use it for
+
+- API keys, session tokens, password reset tokens, CSRF tokens
+- Encryption keys, IVs, nonces, salts for crypto primitives
+- Lottery, gambling, or "provably fair" draws involving money or trust
+- Security identifiers (use `crypto.randomUUID()` instead)
+- Anything where a motivated attacker is trying to predict your output
+
+### Why not crypto
+
+1. The internal PRNG is **xoshiro128\*\***, a fast statistical PRNG with
+   a 128-bit state. It is not a CSPRNG and has no security claims against
+   state recovery from observed output.
+2. The reseed step XORs new bytes into the 128-bit state and runs 8
+   discard rounds. That is good enough to scramble the state for
+   statistical use; it is **not** a key-derivation function and offers
+   no forward-secrecy guarantees.
+3. Most of the built-in entropy sources are **public open-data endpoints**.
+   The data they return is the same for everyone who hits the API around
+   the same time. It is unpredictable to a casual observer, not to a
+   focused attacker.
+4. `hash()` is *not* a cryptographic hash. It is a hex dump of bytes
+   drawn from the PRNG — useful as a varied identifier, not safe as a
+   password hash or MAC.
+
+If you need cryptographic randomness, use the platform primitive:
+
+```ts
+const buf = new Uint8Array(32);
+crypto.getRandomValues(buf);
+```
+
+That is a CSPRNG, designed and audited for exactly this. `voidstream`
+intentionally does not try to replace it.
+
+### Even with custom sources?
+
+You can pass your own `EntropySource` into the constructor. Even if that
+source returns truly secret high-grade entropy, it does **not** turn
+`voidstream` into a CSPRNG, because:
+
+- It is XOR-mixed into the same xoshiro state alongside the built-in
+  public sources.
+- There is no way to ask `voidstream` for "output derived from only
+  source X" — the pool is a shared, opaque blend.
+- xoshiro itself is still the output function.
+
+Custom sources are for *enriching* the pool with extra non-secret signal,
+not for turning the library into a security primitive.
+
+## Pool coverage
+
+`stream.coverage` is a getter that returns a float in `[0, 1]` — the
+share of available entropy sources that have ever successfully delivered
+bytes into the pool.
+
+```ts
+stream.coverage; // e.g. 0   right after construction (bootstrap only)
+                 //      0.5 some sources delivered, others have not yet
+                 //      1   every known source has fed the pool at least once
+```
+
+It is a coarse, *aggregated* health signal — the library still doesn't tell
+you which sources, how often, or how many bytes. Both the source list and
+its size are private. You only see the percentage.
+
+A few things worth knowing:
+
+- The pool **always** starts at `0`. Bootstrap entropy from
+  `crypto.getRandomValues` is not counted; coverage only tracks
+  refreshes from sources.
+- The first network fetch is scheduled within ~1.5 seconds of constructing
+  the instance (small random jitter, not a fixed 5+ min wait). After that,
+  refreshes settle into the long 5..15 min cadence.
+- Coverage is **monotonically non-decreasing** for the lifetime of the
+  instance. It is "did this source ever deliver?", not "did it deliver
+  recently?".
+- A value of `1` means the pool has seen every source at least once. It
+  does **not** mean the pool is now safe for cryptography — see the
+  threat model above.
 
 ## Health signals
 
@@ -112,6 +214,25 @@ at without needing the generic signals.
 If you want programmatic visibility into any of this, intercept
 `console.warn` yourself and filter on the `[voidstream]` prefix — the demo in
 this repo does exactly that.
+
+## Refresh cadence
+
+The scheduler runs entirely in the background and has no public API. Two
+things are worth knowing about its timing:
+
+- **First fetch is fast.** Right after `new VoidStream()`, the scheduler
+  picks a small random delay in `[0, 1500ms)` and then triggers its first
+  refresh. Until that lands, the pool is running on `crypto.getRandomValues`
+  bootstrap + the always-on `localContext` source.
+- **Subsequent fetches are slow and jittered.** Every following refresh
+  is scheduled randomly in `[5min, 15min)`. This is a hard floor: the
+  library will not hammer the public APIs faster than this, regardless
+  of how many sources you add.
+
+Both delays are drawn from the `voidstream` pool itself (via the
+PRNG), not from `Math.random`. That means an external observer who knows
+the moment you constructed the instance still cannot predict when the
+next refresh lands.
 
 ## The local source
 
@@ -172,16 +293,9 @@ Things to keep in mind:
   to add or swap sources later — the pool's input set is frozen for the
   lifetime of the instance.
 - There is intentionally **no** way to tune refresh intervals, initial
-  delays, or anything else about the scheduler from the outside. Those
-  are internal details that may change between minor versions. Adding
-  your own sources is the only knob.
-- The scheduler's own timing (when the next refresh happens, which source
-  is picked) is drawn from the **same pool** the lib hands out — not from
-  `Math.random`. After the constructor's `crypto.getRandomValues` bootstrap,
-  every subsequent scheduling decision is a function of the noise the lib
-  has already collected, so an external observer cannot predict when the
-  pool will be touched next even if they know exactly when the instance
-  was constructed.
+  delays, or anything else about the scheduler from the outside. Adding
+  your own sources is the only knob. See *Refresh cadence* above for what
+  the library actually does internally and why.
 
 ## Build
 

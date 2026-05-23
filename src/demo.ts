@@ -31,6 +31,8 @@ const els = {
     sampleWarning: $<HTMLButtonElement>("#btn-sample-warning"),
     shuffle: $<HTMLButtonElement>("#btn-shuffle"),
     autoshuffle: $<HTMLButtonElement>("#btn-autoshuffle"),
+    coverageFill: $<HTMLDivElement>("#coverage-fill"),
+    coverageValue: $<HTMLSpanElement>("#coverage-value"),
 };
 
 // --- Перехоплювач console.warn ---------------------------------------
@@ -128,6 +130,20 @@ function runOp(op: string): void {
                 label = "hash({ bytes: 16 })";
                 value = stream.hash({ bytes: 16 });
                 break;
+            case "pick": {
+                const palette = ["α", "β", "γ", "δ", "ε"];
+                label = `pick(${JSON.stringify(palette)})`;
+                value = stream.pick(palette);
+                break;
+            }
+            case "shuffle":
+                label = "shuffle([1, 2, 3, 4, 5])";
+                value = stream.shuffle([1, 2, 3, 4, 5]);
+                break;
+            case "chance":
+                label = "chance(0.5)";
+                value = stream.chance(0.5);
+                break;
             default:
                 value = "(unknown op)";
         }
@@ -193,6 +209,21 @@ function renderMessages(): void {
 }
 
 renderMessages();
+
+// --- Coverage poll ---------------------------------------------------
+//
+// Black-box не дає подій — лише геттер. Тому опитуємо. Перший fetch
+// тепер призначається у вікні [0, 1.5s), тому короткий інтервал
+// опитування швидко покаже стрибок 0% → > 0%.
+
+function renderCoverage(): void {
+    const pct = Math.round(stream.coverage * 100);
+    els.coverageValue.textContent = `${pct}%`;
+    els.coverageFill.style.width = `${pct}%`;
+}
+
+renderCoverage();
+setInterval(renderCoverage, 500);
 
 // --- Noise field -----------------------------------------------------
 

@@ -223,6 +223,44 @@ button:disabled {
     color: var(--fg);
 }
 
+.coverage-row {
+    gap: 12px;
+}
+
+.coverage-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--fg-faint);
+    flex: 0 0 auto;
+}
+
+.coverage-bar {
+    flex: 1 1 auto;
+    height: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+
+.coverage-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    transition: width 350ms ease;
+}
+
+.coverage-value {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--fg-dim);
+    min-width: 36px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 .messages-head {
     font-size: 11px;
     text-transform: uppercase;

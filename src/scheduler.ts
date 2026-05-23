@@ -41,6 +41,15 @@ const FIVE_MIN = 5 * 60 * 1000;
 const FIFTEEN_MIN = 15 * 60 * 1000;
 
 /**
+ * Верхня межа jitter-вікна для САМОГО ПЕРШОГО fetch-у. Свідомо мала:
+ * хочемо, щоб пул отримав мережеву ентропію якомога швидше після
+ * створення інстансу, а не чекав 5+ хв. Невеликий jitter (а не 0)
+ * розкидає одночасний "холодний старт" між tab-ами/клієнтами, щоб
+ * не дзвонити в API синхронним натовпом.
+ */
+const INITIAL_JITTER_MAX_MS = 1500;
+
+/**
  * `setTimeout` у Node повертає об'єкт `Timeout` з методом `.unref()`, який
  * прибирає таймер з лічильника подій runtime — тобто Node-процес зможе
  * вийти, навіть якщо ще є невиконаний таймер. У браузері `setTimeout`
@@ -56,16 +65,22 @@ function unrefTimer(t: ReturnType<typeof setTimeout>): void {
 }
 
 /**
- * Фоновий планувальник, який раз на ~5..15 хв обирає випадкове джерело
- * і витягує з нього порцію ентропії. Не має публічного API — VoidStream
- * створює його у конструкторі і ніколи не зупиняє.
+ * Фоновий планувальник:
+ *   - перший fetch  — через невелику випадкову jitter-затримку
+ *     [0, INITIAL_JITTER_MAX_MS), щоб пул отримав справжню мережеву
+ *     ентропію якомога швидше;
+ *   - подальші tick-и — раз на ~5..15 хв, теж випадково в межах вікна,
+ *     щоб не вантажити безкоштовні API і не давати спостерігачеві
+ *     передбачуваних моментів.
  *
- * Усі "ймовірні" рішення (затримка наступного тіку, вибір джерела)
+ * Не має публічного API — VoidStream створює його у конструкторі і
+ * ніколи не зупиняє.
+ *
+ * Усі "ймовірні" рішення (час наступного тіку, вибір джерела)
  * тягнуться через `opts.random()`, який у production підключений до
- * пулу самої VoidStream. Перший fetch так само призначається на випадковий
- * момент у [minMs, maxMs] — без фіксованої "стартової" константи,
- * щоб не давати спостерігачеві опорної точки на кшталт "точно через
- * 5 хв після завантаження сторінки".
+ * пулу самої VoidStream. Це робить навіть моменти первинного "холодного
+ * старту" функцією від bootstrap-ентропії (crypto.getRandomValues +
+ * timing), а не від, скажімо, `Math.random()` чи `performance.now()`.
  */
 export class Scheduler {
     private timer: ReturnType<typeof setTimeout> | null = null;
@@ -87,7 +102,7 @@ export class Scheduler {
     start(): void {
         if (this.opts.sources.length === 0) return;
         if (this.timer !== null) return;
-        this.scheduleIn(this.randomDelay());
+        this.scheduleIn(this.initialDelay());
     }
 
     /**
@@ -99,7 +114,19 @@ export class Scheduler {
         return this.opts.random ? this.opts.random() : Math.random();
     }
 
-    /** Випадкова затримка у [minMs, maxMs). */
+    /**
+     * Затримка перед першим tick-ом. Свідомо коротка: основна задача
+     * jitter-у тут — не "розкидати в часі", а лише уникнути одночасного
+     * залпу запитів з усіх свіжо-відкритих сторінок. Чим раніше
+     * вистрелить перший fetch, тим раніше пул отримає справжню
+     * мережеву ентропію (до того моменту він харчується bootstrap-ом
+     * та localContext-ом).
+     */
+    private initialDelay(): number {
+        return this.next01() * INITIAL_JITTER_MAX_MS;
+    }
+
+    /** Випадкова затримка для подальших tick-ів: у вікні [minMs, maxMs). */
     private randomDelay(): number {
         const range = this.maxMs - this.minMs;
         return this.minMs + this.next01() * range;

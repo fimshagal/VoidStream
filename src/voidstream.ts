@@ -70,6 +70,14 @@ export class VoidStream {
     private warnedAboutRepeatedFailure = false;
     private warnedAboutWeakBootstrap = false;
 
+    // Відстеження покриття джерел: тримаємо референси на ті джерела,
+    // що хоча б раз успішно доставили байти. Використовується тільки
+    // публічним геттером `coverage`. WeakSet недоречно — нам потрібен
+    // `.size`, а Set<EntropySource> працює за reference (source-об'єкти
+    // — модульні singleton-и, тому ідентичність стабільна).
+    private readonly deliveredSources = new Set<EntropySource>();
+    private readonly totalSourcesCount: number;
+
     constructor(opts: VoidStreamOptions = {}) {
         this.bootstrap();
         // Дефолтні джерела завжди йдуть першими і завжди присутні.
@@ -78,9 +86,11 @@ export class VoidStream {
         // black-box-моделі: пул завжди харчується з відомого нам
         // набору; ззовні можна лише розширювати.
         const customSources = opts.sources ?? [];
+        const allSources = [...defaultSources(), ...customSources];
+        this.totalSourcesCount = allSources.length;
         this.scheduler = new Scheduler({
-            sources: [...defaultSources(), ...customSources],
-            onEntropy: (bytes) => this.handleRefreshSuccess(bytes),
+            sources: allSources,
+            onEntropy: (bytes, source) => this.handleRefreshSuccess(bytes, source),
             onError: (err, source) => this.handleRefreshFailure(err, source),
             // Самообслуговування ліби тягнеться з її ж пулу. До цього
             // моменту PRNG уже засіяний у bootstrap() з crypto.getRandomValues
@@ -141,10 +151,11 @@ export class VoidStream {
         return parts.join("|");
     }
 
-    private handleRefreshSuccess(bytes: Uint8Array): void {
+    private handleRefreshSuccess(bytes: Uint8Array, source: EntropySource): void {
         this.prng.seed(bytes);
         this.consecutiveFailures = 0;
         this.everSucceeded = true;
+        this.deliveredSources.add(source);
         // Скидаємо прапор "вже попереджав", щоб наступна серія невдач
         // дала свіжий warn замість тиші.
         this.warnedAboutRepeatedFailure = false;
@@ -197,6 +208,38 @@ export class VoidStream {
     // час `new VoidStream({ sources: [...] })`. Так само свідомо
     // прибрали `salt` з `hash()` — раніше salt домішувався в PRNG,
     // що було еквівалентно `mix()`.
+
+    /**
+     * Покриття пулу: частка джерел, які хоч раз успішно доставили
+     * байти, у форматі float у [0, 1].
+     *
+     * Інтерпретація:
+     *   - `0`           — щойно після конструювання; пул живе лише
+     *                     на bootstrap-ентропії (`crypto.getRandomValues`
+     *                     + контекст середовища). Це безпечно для
+     *                     більшості use cases, але мережевий шум сюди
+     *                     ще не дотік.
+     *   - проміжне      — частина джерел доставила, інші ще ні
+     *                     (зазвичай через мережеві помилки чи
+     *                     5..15-хв ритм планувальника).
+     *   - наближається до `1` — пул отримав ентропію з усіх відомих
+     *                     йому джерел і живе на повну ширину.
+     *
+     * Що це НЕ є:
+     *   - не "скільки байт у пулі" (xoshiro має фіксований 128-бітний
+     *     стан, а не байтовий буфер);
+     *   - не "ентропія в бітах за Шенноном" (для цього треба було б
+     *     знати справжній розподіл вхідних джерел);
+     *   - не доказ того, що значення безпечні для криптографії —
+     *     навіть при `coverage === 1` це все ще non-crypto PRNG.
+     *
+     * Імена джерел та їх кількість назовні не розкриваються — лише
+     * агрегований відсоток.
+     */
+    get coverage(): number {
+        if (this.totalSourcesCount === 0) return 0;
+        return this.deliveredSources.size / this.totalSourcesCount;
+    }
 
     /** N сирих байтів. */
     bytes(n: number): Uint8Array {
@@ -271,6 +314,48 @@ export class VoidStream {
             const row: number[] = new Array(cols);
             for (let c = 0; c < cols; c++) row[c] = this.float(min, max);
             out[r] = row;
+        }
+        return out;
+    }
+
+    /**
+     * Випадковий елемент масиву (uniform). Кидає `RangeError` на
+     * порожньому масиві — пуста вибірка завжди є помилкою програміста,
+     * мовчазне `undefined` маскувало б її.
+     */
+    pick<T>(items: readonly T[]): T {
+        if (items.length === 0) {
+            throw new RangeError("pick(items): items must be non-empty");
+        }
+        return items[this.int(0, items.length)]!;
+    }
+
+    /**
+     * Випадкове булеве з ймовірністю `p` отримати `true`.
+     * `p` свідомо клампиться: `<= 0` → завжди `false`, `>= 1` → завжди
+     * `true`. NaN/Infinity відхиляються RangeError-ом.
+     */
+    chance(p: number): boolean {
+        if (!Number.isFinite(p)) {
+            throw new RangeError("chance(p): p must be a finite number");
+        }
+        if (p <= 0) return false;
+        if (p >= 1) return true;
+        return this.unit() < p;
+    }
+
+    /**
+     * Повертає НОВУ перетасовану копію масиву (Fisher–Yates). Вхідний
+     * масив не мутується — це робить метод безпечним для readonly-входу
+     * і узгоджує його з рештою API, яка завжди повертає, а не пише.
+     */
+    shuffle<T>(items: readonly T[]): T[] {
+        const out = items.slice();
+        for (let i = out.length - 1; i > 0; i--) {
+            const j = this.int(0, i + 1);
+            const tmp = out[i]!;
+            out[i] = out[j]!;
+            out[j] = tmp;
         }
         return out;
     }

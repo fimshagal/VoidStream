@@ -3,9 +3,10 @@
 //
 // Інстанс створюється БЕЗ опцій — це означає що активується повний
 // дефолтний набір джерел. Планувальник стартує автоматично, але:
-//   1. Має 5..15 хв initial delay перед першим fetch-ом.
+//   1. Перший fetch має короткий jitter [0, 1500ms); подальші — у вікні
+//      5..15 хв.
 //   2. Викликає setTimeout(...).unref() у Node, тому процес виходить
-//      одразу після завершення тіла тесту, без очікування.
+//      одразу після завершення тіла тесту, без очікування таймера.
 // Жодного мережевого запиту під час тесту не відбувається.
 //
 // `sources: []` навмисно НЕ передаємо — у нової семантики `sources`
@@ -79,6 +80,49 @@ function checkSurface(label, VoidStream) {
         hSalt,
         /^[0-9a-f]{32}$/,
         `${label}: hash({bytes, salt}) — salt має ігноруватись`,
+    );
+
+    // Sugar-методи: pick / chance / shuffle.
+    const palette = ["a", "b", "c", "d"];
+    for (let k = 0; k < 8; k++) {
+        const v = stream.pick(palette);
+        assert.ok(palette.includes(v), `${label}: pick must return element from input`);
+    }
+    assert.throws(
+        () => stream.pick([]),
+        RangeError,
+        `${label}: pick([]) must throw`,
+    );
+
+    assert.equal(stream.chance(0), false, `${label}: chance(0) === false`);
+    assert.equal(stream.chance(1), true, `${label}: chance(1) === true`);
+    assert.equal(stream.chance(-0.5), false, `${label}: chance(<0) === false`);
+    assert.equal(stream.chance(1.5), true, `${label}: chance(>1) === true`);
+    assert.equal(typeof stream.chance(0.5), "boolean", `${label}: chance(0.5) is boolean`);
+    assert.throws(() => stream.chance(NaN), RangeError, `${label}: chance(NaN) throws`);
+    assert.throws(() => stream.chance(Infinity), RangeError, `${label}: chance(Inf) throws`);
+
+    const src = [1, 2, 3, 4, 5];
+    const srcCopy = src.slice();
+    const shuffled = stream.shuffle(src);
+    assert.equal(shuffled.length, src.length, `${label}: shuffle preserves length`);
+    assert.deepEqual(
+        shuffled.slice().sort((x, y) => x - y),
+        src.slice().sort((x, y) => x - y),
+        `${label}: shuffle preserves multiset`,
+    );
+    assert.deepEqual(src, srcCopy, `${label}: shuffle must not mutate input`);
+    assert.equal(stream.shuffle([]).length, 0, `${label}: shuffle([]) === []`);
+
+    // Coverage: щойно сконструйований інстанс ще не отримав жодного
+    // tick-у (setTimeout-и unref'нуті і Node вийде до їх firing-у).
+    // Тому coverage має бути рівно 0 — типобезпечно і у валідному
+    // діапазоні. Будь-яке інше значення тут — баг.
+    assert.equal(typeof stream.coverage, "number", `${label}: coverage is number`);
+    assert.equal(
+        stream.coverage,
+        0,
+        `${label}: fresh instance must have coverage === 0 before any tick`,
     );
 
     console.log(`  ok  ${label}`);
@@ -186,18 +230,18 @@ assert.ok(
     `.d.ts: hash() must not accept 'salt' anymore, got: ${hashSig[0]}`,
 );
 
-// Самообслуговування scheduler-а: він НЕ повинен звертатися до Math.random.
-// Підміняємо Math.random на трап (кидає при виклику) і setTimeout на спостерігач,
-// створюємо кілька інстансів і перевіряємо:
+// Самообслуговування scheduler-а: він НЕ повинен звертатися до Math.random,
+// а перший fetch має призначатися на короткий jitter [0, 1500ms), а не
+// чекати 5+ хв як раніше. Підміняємо Math.random на трап і setTimeout
+// на спостерігач, створюємо два інстанси і перевіряємо:
 //   1. Math.random жодного разу не викликана.
-//   2. setTimeout викликано — це стартова затримка scheduler-а.
-//   3. Затримка лежить у вікні [5хв, 15хв).
+//   2. Кожен інстанс викликав setTimeout — це стартова затримка.
+//   3. Початкова затримка лежить у вікні [0, INITIAL_MAX_MS).
 //   4. Дві незалежні VoidStream-сутності отримують РІЗНІ стартові затримки
 //      — це доводить, що значення тягнеться з пулу, а не зі статичної
 //      константи.
 {
-    const FIVE_MIN = 5 * 60 * 1000;
-    const FIFTEEN_MIN = 15 * 60 * 1000;
+    const INITIAL_MAX_MS = 1500;
 
     const origMathRandom = Math.random;
     const origSetTimeout = globalThis.setTimeout;
@@ -232,8 +276,8 @@ assert.ok(
         );
         for (const d of observedDelays) {
             assert.ok(
-                typeof d === "number" && d >= FIVE_MIN && d < FIFTEEN_MIN,
-                `scheduler delay ${d} ms must be in [${FIVE_MIN}, ${FIFTEEN_MIN})`,
+                typeof d === "number" && d >= 0 && d < INITIAL_MAX_MS,
+                `initial scheduler delay ${d} ms must be in [0, ${INITIAL_MAX_MS}) — first fetch should be fast`,
             );
         }
         assert.notEqual(
@@ -245,7 +289,74 @@ assert.ok(
         Math.random = origMathRandom;
         globalThis.setTimeout = origSetTimeout;
     }
-    console.log(`  ok  scheduler uses voidstream-pool randomness (no Math.random hits)`);
+    console.log(`  ok  initial fetch is scheduled fast (jittered <1500ms) from voidstream pool`);
+}
+
+// Доводимо ДВІ важливі властивості разом:
+//   (1) після першого реального tick-у наступна затримка вже довга
+//       (5..15 хв) — штатний інтервал підтримки пулу;
+//   (2) coverage реагує на успішну доставку байтів — значення > 0.
+//
+// Хитрощі:
+//   - підставляємо setTimeout, що ВИКОНУЄ першу заплановану функцію
+//     одразу (через мікротаску), а подальші лише фіксує — інакше
+//     потрапимо у рекурсію планування;
+//   - стабимо глобальний fetch порожньою OK-відповіддю, щоб built-in
+//     HTTP-джерела не зачіпали реальну мережу під час тесту, який би
+//     pickSource не обрав.
+{
+    const FIVE_MIN = 5 * 60 * 1000;
+    const FIFTEEN_MIN = 15 * 60 * 1000;
+
+    const origSetTimeout = globalThis.setTimeout;
+    const origFetch = globalThis.fetch;
+    const allDelays = [];
+    let firedFirst = false;
+
+    globalThis.setTimeout = (fn, ms) => {
+        allDelays.push(ms);
+        if (!firedFirst) {
+            firedFirst = true;
+            queueMicrotask(() => {
+                try { fn(); } catch { /* swallow — тест перевіряє планування, не tick body */ }
+            });
+        }
+        return { unref() {} };
+    };
+    globalThis.fetch = async () => new Response("stub-data-" + Date.now(), { status: 200 });
+
+    try {
+        const s = new esm.VoidStream();
+
+        // Прокручуємо мікротаски: scheduler має fire-нути перший tick,
+        // тік await-не fetch (стабований/миттєвий), викличе onEntropy
+        // (або onError), і scheduleIn(randomDelay()) у `finally`.
+        for (let i = 0; i < 50; i++) await Promise.resolve();
+
+        const subsequent = allDelays.slice(1);
+        assert.ok(
+            subsequent.length >= 1,
+            `expected scheduler to plan at least one follow-up tick; got delays ${JSON.stringify(allDelays)}`,
+        );
+        for (const d of subsequent) {
+            assert.ok(
+                typeof d === "number" && d >= FIVE_MIN && d < FIFTEEN_MIN,
+                `subsequent scheduler delay ${d} ms must be in [${FIVE_MIN}, ${FIFTEEN_MIN}) — long-term refresh interval`,
+            );
+        }
+
+        // Coverage має зрости від 0 — одне з джерел (мережеве або
+        // localContext) повернуло байти.
+        assert.ok(
+            s.coverage > 0,
+            `coverage must increase after a successful tick, got ${s.coverage}`,
+        );
+        assert.ok(s.coverage <= 1, `coverage must be <= 1, got ${s.coverage}`);
+    } finally {
+        globalThis.setTimeout = origSetTimeout;
+        globalThis.fetch = origFetch;
+    }
+    console.log(`  ok  subsequent ticks use 5..15 min interval; coverage tracks deliveries`);
 }
 
 console.log("all good");
