@@ -63,8 +63,9 @@ stream.pick(["a", "b", "c"]);  // uniform random element
 stream.chance(0.25);           // boolean, p = 0.25
 stream.shuffle([1, 2, 3, 4]);  // new shuffled copy (Fisher–Yates)
 
-stream.hash();                 // 64-char hex string (32 random bytes)
-stream.hash({ bytes: 16 });    // 32-char hex string (16 random bytes)
+stream.hex();                  // 64-char hex string (32 random bytes)
+stream.hex({ bytes: 16 });     // 32-char hex string (16 random bytes)
+stream.hash();                 // alias for hex() — not a crypto hash
 
 stream.coverage;               // 0..1 — share of sources that have delivered
 ```
@@ -109,17 +110,20 @@ malicious adversary trying to reconstruct your numbers is **not** in scope.
 1. The internal PRNG is **xoshiro128\*\***, a fast statistical PRNG with
    a 128-bit state. It is not a CSPRNG and has no security claims against
    state recovery from observed output.
-2. The reseed step XORs new bytes into the 128-bit state and runs 8
-   discard rounds. That is good enough to scramble the state for
-   statistical use; it is **not** a key-derivation function and offers
-   no forward-secrecy guarantees.
+2. Background refreshes reseed the PRNG via **SHA-256**
+   (`SHA-256(old_state || new_bytes) → state`) when `crypto.subtle` is
+   available; bootstrap still uses a synchronous XOR mix. This is good
+   enough to scramble large payloads into the 128-bit state; it is **not**
+   a key-derivation function and offers no forward-secrecy guarantees.
 3. Most of the built-in entropy sources are **public open-data endpoints**.
    The data they return is the same for everyone who hits the API around
    the same time. It is unpredictable to a casual observer, not to a
    focused attacker.
-4. `hash()` is *not* a cryptographic hash. It is a hex dump of bytes
-   drawn from the PRNG — useful as a varied identifier, not safe as a
-   password hash or MAC.
+4. `hex()` (and the legacy alias `hash()`) is *not* a cryptographic
+   hash. It is a hex dump of bytes drawn from the PRNG — useful as a
+   varied identifier, not safe as a password hash or MAC.
+5. `int(min, max)` uses **rejection sampling** for a uniform distribution
+   without modulo bias (relevant for loot tables, `pick()`, `shuffle()`).
 
 If you need cryptographic randomness, use the platform primitive:
 

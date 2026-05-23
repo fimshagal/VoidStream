@@ -43,11 +43,15 @@ function checkSurface(label, VoidStream) {
     assert.equal(m.length, 2);
     assert.equal(m[0].length, 3);
 
-    const h = stream.hash();
-    assert.match(h, /^[0-9a-f]{64}$/, `${label}: hash hex`);
+    const h = stream.hex();
+    assert.match(h, /^[0-9a-f]{64}$/, `${label}: hex()`);
 
-    const h2 = stream.hash({ bytes: 8 });
-    assert.match(h2, /^[0-9a-f]{16}$/, `${label}: hash bytes`);
+    const h2 = stream.hex({ bytes: 8 });
+    assert.match(h2, /^[0-9a-f]{16}$/, `${label}: hex({bytes: 8})`);
+
+    // Legacy alias — має повертати те саме, що hex().
+    const hAlias = stream.hash({ bytes: 8 });
+    assert.match(hAlias, /^[0-9a-f]{16}$/, `${label}: hash() alias`);
 
     // Чорний ящик: жодного публічного методу для керування, інтроспекції
     // або ЗОВНІШНЬОГО ДОМІШУВАННЯ ентропії не існує. `mix`, `feed`,
@@ -72,15 +76,25 @@ function checkSurface(label, VoidStream) {
     }
 
     // `hash({ salt })` колись існував і домішував salt у пул — це було
-    // прихованим `mix()`. Зараз salt не приймається: hash() — чистий
-    // read-only снімок. Перевіряємо, що salt не змінює довжину виходу
-    // і не спричиняє жодного зайвого ефекту, який залежав би від нього.
-    const hSalt = stream.hash({ bytes: 16, salt: "ignored" });
+    // прихованим `mix()`. Зараз salt не приймається: hex() — чистий
+    // read-only снімок. Перевіряємо, що salt не змінює довжину виходу.
+    const hSalt = stream.hex({ bytes: 16, salt: "ignored" });
     assert.match(
         hSalt,
         /^[0-9a-f]{32}$/,
-        `${label}: hash({bytes, salt}) — salt має ігноруватись`,
+        `${label}: hex({bytes, salt}) — salt має ігноруватись`,
     );
+
+    // Rejection sampling: int(0, 4) має давати рівномірний розподіл.
+    // 10k draws — chi-square не робимо, але кожен bucket має з'явитись.
+    const buckets = [0, 0, 0, 0];
+    for (let t = 0; t < 10_000; t++) {
+        const idx = stream.int(0, 4);
+        buckets[idx]++;
+    }
+    for (const count of buckets) {
+        assert.ok(count > 0, `${label}: int(0,4) rejection sampling — empty bucket`);
+    }
 
     // Sugar-методи: pick / chance / shuffle.
     const palette = ["a", "b", "c", "d"];
@@ -221,14 +235,16 @@ for (const m of bannedMethods) {
         `.d.ts must not expose method '${m}()' on the public VoidStream surface`,
     );
 }
-// `hash()` має тип лише з `bytes?:` — без `salt`. Перевіряємо, що в
-// сигнатурі hash немає поля `salt`.
-const hashSig = optsDts.match(/hash\([^)]*\)/);
-assert.ok(hashSig, ".d.ts: hash() signature missing");
+// `hex()` має тип лише з `bytes?:` — без `salt`. Перевіряємо, що в
+// сигнатурі hex немає поля `salt`.
+const hexSig = optsDts.match(/hex\([^)]*\)/);
+assert.ok(hexSig, ".d.ts: hex() signature missing");
 assert.ok(
-    !hashSig[0].includes("salt"),
-    `.d.ts: hash() must not accept 'salt' anymore, got: ${hashSig[0]}`,
+    !hexSig[0].includes("salt"),
+    `.d.ts: hex() must not accept 'salt', got: ${hexSig[0]}`,
 );
+// hash() лишається як alias — перевіряємо що він є.
+assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
 
 // Самообслуговування scheduler-а: він НЕ повинен звертатися до Math.random,
 // а перший fetch має призначатися на короткий jitter [0, 1500ms), а не
@@ -328,10 +344,14 @@ assert.ok(
     try {
         const s = new esm.VoidStream();
 
-        // Прокручуємо мікротаски: scheduler має fire-нути перший tick,
-        // тік await-не fetch (стабований/миттєвий), викличе onEntropy
-        // (або onError), і scheduleIn(randomDelay()) у `finally`.
-        for (let i = 0; i < 50; i++) await Promise.resolve();
+        // tick() async (fetch + SHA-256 seedMix). Чекаємо, поки finally
+        // scheduleIn(randomDelay()) запише другу затримку.
+        for (let i = 0; i < 200 && allDelays.length < 2; i++) {
+            await Promise.resolve();
+        }
+        if (allDelays.length < 2) {
+            await new Promise((r) => origSetTimeout(r, 50));
+        }
 
         const subsequent = allDelays.slice(1);
         assert.ok(

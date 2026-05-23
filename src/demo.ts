@@ -122,13 +122,13 @@ function runOp(op: string): void {
                 label = "floatMatrix(3, 3)";
                 value = stream.floatMatrix(3, 3);
                 break;
-            case "hash":
-                label = "hash()";
-                value = stream.hash();
+            case "hex":
+                label = "hex()";
+                value = stream.hex();
                 break;
-            case "hash-bytes":
-                label = "hash({ bytes: 16 })";
-                value = stream.hash({ bytes: 16 });
+            case "hex-bytes":
+                label = "hex({ bytes: 16 })";
+                value = stream.hex({ bytes: 16 });
                 break;
             case "pick": {
                 const palette = ["α", "β", "γ", "δ", "ε"];

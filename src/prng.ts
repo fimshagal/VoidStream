@@ -1,3 +1,5 @@
+import { concatBytes } from "./utils";
+
 /**
  * xoshiro128** — швидкий 32-бітний PRNG з 128-бітним станом.
  *
@@ -7,9 +9,14 @@
  * стійким, але як змішувальна функція над постійно оновлюваним
  * пулом ентропії дає синхронний доступ і добру статистичну якість.
  *
- * Стан можна "досівати" в будь-який момент через `seed(bytes)` —
- * нові байти ксоряться у 16-байтовий стан, виконується 8 викидних
- * раундів для розповсюдження.
+ * Два шляхи оновлення стану:
+ *   - `seed()`    — синхронний XOR-mix + discard. Використовується
+ *                   лише при bootstrap у конструкторі VoidStream,
+ *                   де async недоступний/небажаний.
+ *   - `seedMix()` — async SHA-256 extract (old_state || new_bytes)
+ *                   → новий 128-bit state. Використовується при
+ *                   кожному фоновому refresh з джерел. Fallback
+ *                   на XOR, якщо `crypto.subtle` недоступний.
  */
 
 function rotl(x: number, k: number): number {
@@ -24,7 +31,7 @@ export class Xoshiro128ss {
     ]);
 
     /**
-     * Домішує сирі байти у стан і виконує 8 викидних раундів.
+     * Синхронний XOR-mix + 8 discard rounds. Тільки для bootstrap.
      * Безпечно викликати з будь-якою кількістю байтів, у тому числі 0.
      */
     seed(bytes: Uint8Array): void {
@@ -33,11 +40,33 @@ export class Xoshiro128ss {
         for (let i = 0; i < bytes.length; i++) {
             view[i & 15] ^= bytes[i]!;
         }
-        // Уникаємо повністю нульового стану (заборонений для xoshiro).
-        if ((this.s[0]! | this.s[1]! | this.s[2]! | this.s[3]!) === 0) {
-            this.s[0] = 1;
-        }
+        this.guardNonZeroState();
         for (let i = 0; i < 8; i++) this.next();
+    }
+
+    /**
+     * Async reseed для фонових refresh-ів. Якщо `crypto.subtle.digest`
+     * доступний — SHA-256(old_state || new_bytes) → новий стан.
+     * Інакше — той самий XOR, що й `seed()`.
+     *
+     * Це НЕ робить PRNG криптографічним, але гарантує, що великий
+     * payload з джерела (кілобайти USGS-тексту) повністю перемішує
+     * 128-bit state, а не ксориться по 16 байтах по колу.
+     */
+    async seedMix(bytes: Uint8Array): Promise<void> {
+        if (bytes.length === 0) return;
+
+        const subtle =
+            typeof crypto !== "undefined" ? crypto.subtle : undefined;
+        if (subtle?.digest) {
+            const oldState = new Uint8Array(this.s.buffer);
+            const combined = concatBytes(oldState, bytes);
+            const digest = await subtle.digest("SHA-256", combined);
+            this.loadStateFromDigest(new Uint8Array(digest));
+            return;
+        }
+
+        this.seed(bytes);
     }
 
     /** Одне 32-бітне беззнакове ціле. */
@@ -80,5 +109,22 @@ export class Xoshiro128ss {
             }
         }
         return out;
+    }
+
+    private loadStateFromDigest(hash: Uint8Array): void {
+        const view = new DataView(hash.buffer, hash.byteOffset, hash.byteLength);
+        this.s[0] = view.getUint32(0, true);
+        this.s[1] = view.getUint32(4, true);
+        this.s[2] = view.getUint32(8, true);
+        this.s[3] = view.getUint32(12, true);
+        this.guardNonZeroState();
+        for (let i = 0; i < 8; i++) this.next();
+    }
+
+    private guardNonZeroState(): void {
+        // xoshiro забороняє all-zero state.
+        if ((this.s[0]! | this.s[1]! | this.s[2]! | this.s[3]!) === 0) {
+            this.s[0] = 1;
+        }
     }
 }

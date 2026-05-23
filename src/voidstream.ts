@@ -151,8 +151,11 @@ export class VoidStream {
         return parts.join("|");
     }
 
-    private handleRefreshSuccess(bytes: Uint8Array, source: EntropySource): void {
-        this.prng.seed(bytes);
+    private async handleRefreshSuccess(
+        bytes: Uint8Array,
+        source: EntropySource,
+    ): Promise<void> {
+        await this.prng.seedMix(bytes);
         this.consecutiveFailures = 0;
         this.everSucceeded = true;
         this.deliveredSources.add(source);
@@ -206,7 +209,7 @@ export class VoidStream {
     // ззовні (`mix`, `feed`, `seed` тощо). Єдиний легальний шлях
     // підкинути власну ентропію — це передати кастомне джерело під
     // час `new VoidStream({ sources: [...] })`. Так само свідомо
-    // прибрали `salt` з `hash()` — раніше salt домішувався в PRNG,
+    // прибрали `salt` з `hex()`/`hash()` — раніше salt домішувався в PRNG,
     // що було еквівалентно `mix()`.
 
     /**
@@ -264,7 +267,7 @@ export class VoidStream {
         if (hi <= lo) {
             throw new RangeError(`int(min, max): max (${max}) must be > min (${min})`);
         }
-        return lo + Math.floor(this.unit() * (hi - lo));
+        return lo + unbiasedInt(this.prng, hi - lo);
     }
 
     /** Float у [min, max). За замовчуванням — [0, 1). */
@@ -361,16 +364,25 @@ export class VoidStream {
     }
 
     /**
-     * Hex-хеш, побудований із поточного пулу ентропії. Чистий read-only
-     * снімок — не змінює пул нічим, окрім стандартного просування
-     * PRNG-стану на `bytes` байтів (як будь-який інший draw).
+     * Hex-рядок з N випадкових байтів пулу. Це **не** криптографічний
+     * хеш — лише зручне текстове представлення draw-у, як `bytes(n)`
+     * у hex-форматі.
      */
-    hash(opts: { bytes?: number } = {}): string {
+    hex(opts: { bytes?: number } = {}): string {
         const len = opts.bytes ?? 32;
         if (!Number.isInteger(len) || len <= 0) {
-            throw new RangeError("hash({bytes}): bytes must be a positive integer");
+            throw new RangeError("hex({bytes}): bytes must be a positive integer");
         }
         return toHex(this.prng.nextBytes(len));
+    }
+
+    /**
+     * Alias для `hex()`. Залишено для зворотної сумісності.
+     * Назва навмисно misleading — це **не** SHA-256 чи інший crypto hash.
+     * Prefer `hex()`.
+     */
+    hash(opts: { bytes?: number } = {}): string {
+        return this.hex(opts);
     }
 }
 
@@ -387,4 +399,25 @@ function assertMatrixDims(rows: number, cols: number): void {
     if (!Number.isInteger(cols) || cols < 1) {
         throw new RangeError(`matrix cols must be a positive integer (got ${cols})`);
     }
+}
+
+const UINT32_MOD = 0x1_0000_0000;
+
+/**
+ * Uniform integer у [0, range) без modulo bias (rejection sampling).
+ * Для range === 2^32 — повертає повний uint32 напряму.
+ */
+function unbiasedInt(prng: Xoshiro128ss, range: number): number {
+    if (range <= 0) {
+        throw new RangeError("unbiasedInt: range must be positive");
+    }
+    if (range === 1) return 0;
+    if (range >= UINT32_MOD) return prng.next() >>> 0;
+
+    const threshold = UINT32_MOD - (UINT32_MOD % range);
+    let r: number;
+    do {
+        r = prng.next() >>> 0;
+    } while (r >= threshold);
+    return r % range;
 }

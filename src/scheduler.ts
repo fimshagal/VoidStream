@@ -3,8 +3,8 @@ import type { EntropySource } from "./sources/types";
 export interface SchedulerOptions {
     /** Список джерел; порожній масив фактично вимикає фоновий збір. */
     sources: EntropySource[];
-    /** Викликається коли черговий fetch завершився успішно. */
-    onEntropy: (bytes: Uint8Array, source: EntropySource) => void;
+    /** Викликається коли черговий fetch завершився успішно. Може бути async. */
+    onEntropy: (bytes: Uint8Array, source: EntropySource) => void | Promise<void>;
     /**
      * Викликається при помилці джерела. Прокидаємо повний source-об'єкт
      * (а не лише його name), щоб споживач коллбеку міг ідентифікувати
@@ -146,7 +146,7 @@ export class Scheduler {
         const src = this.pickSource();
         try {
             const bytes = await src.fetch();
-            this.opts.onEntropy(bytes, src);
+            await this.opts.onEntropy(bytes, src);
         } catch (err) {
             this.opts.onError?.(err, src);
         } finally {
