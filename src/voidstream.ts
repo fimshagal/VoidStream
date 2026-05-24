@@ -47,14 +47,14 @@ const COVERAGE_STEADY_ABOVE = 0.6;
 
 /** Поки coverage < 50% — часті tick-и для швидкого наповнення пулу. */
 const DELAY_WARMUP_MIN_MS = 2_000;
-const DELAY_WARMUP_MAX_MS = 10_000;
+const DELAY_WARMUP_MAX_MS = 5_000;
 
 /** Перехід 50–60% — помірне уповільнення. */
-const DELAY_MID_MIN_MS = 10_000;
-const DELAY_MID_MAX_MS = 60_000;
+const DELAY_MID_MIN_MS = 6_000;
+const DELAY_MID_MAX_MS = 20_000;
 
-/** coverage ≥ 60% — штатний довгий режим. */
-const DELAY_STEADY_MIN_MS = 5 * 60_000;
+/** coverage ≥ 60% — штатний режим (щільніший floor, ніж раніше). */
+const DELAY_STEADY_MIN_MS = 30_000;
 const DELAY_STEADY_MAX_MS = 15 * 60_000;
 
 /** Локальний idle-stir: `localContext` + timing, без HTTP. */
@@ -188,9 +188,9 @@ export class VoidStream {
      * Інтервал до наступного фонового fetch-у залежно від coverage.
      * Перший tick планувальник ставить окремо (cold-start jitter).
      *
-     *   coverage < 50%  → 2..10 с
-     *   50% ≤ c < 60%   → 10 с..1 хв
-     *   coverage ≥ 60%  → 5..15 хв
+     *   coverage < 50%  → 2..5 с
+     *   50% ≤ c < 60%   → 6..20 с
+     *   coverage ≥ 60%  → 30 с..15 хв
      */
     private scheduleDelayMs(): number {
         const c = this.coverage;
@@ -326,10 +326,10 @@ export class VoidStream {
      *                     (1..3 с) швидко додає `localContext`; coverage
      *                     може стати > 0 ще до першого мережевого tick-у.
      *   - проміжне      — частина джерел доставила; планувальник частіше
-     *                     tick-ає (2..10 с), поки coverage < 50%, і
+     *                     tick-ає (2..5 с), поки coverage < 50%, і
      *                     пріоритезує ще не доставлені джерела, поки < 60%
      *   - наближається до `1` — усі джерела доставили; перехід на
-     *                     рідкий режим 5..15 хв (від coverage ≥ 60%)
+     *                     рідший режим 30 с..15 хв (від coverage ≥ 60%)
      *
      * Що це НЕ є:
      *   - не "скільки байт у пулі" (xoshiro має фіксований 128-бітний

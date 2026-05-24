@@ -177,7 +177,7 @@ A few things worth knowing:
   the instance (small random jitter). Until coverage reaches 60%, the
   network scheduler **prioritizes sources that have not yet delivered** —
   so the bar does not stall on repeated `localContext` hits. After 60%,
-  network refreshes use the long 5..15 min cadence (see *Refresh cadence*).
+  network refreshes use the long 30s..15 min cadence (see *Refresh cadence*).
 - Coverage is **monotonically non-decreasing** for the lifetime of the
   instance. It is "did this source ever deliver?", not "did it deliver
   recently?".
@@ -249,12 +249,12 @@ network warnings still work.
 
   | Coverage | Network interval between ticks |
   | --- | --- |
-  | `< 50%` | `[2s, 10s)` |
-  | `50% .. 60%` | `[10s, 1min)` |
-  | `≥ 60%` | `[5min, 15min)` — steady state |
+  | `< 50%` | `[2s, 5s)` |
+  | `50% .. 60%` | `[6s, 20s)` |
+  | `≥ 60%` | `[30s, 15min)` — steady state |
 
-  The steady-state floor (`5min`) keeps load on public APIs moderate.
-  Delays, source picks, and local stir timing are drawn from the voidstream
+  The steady-state floor (`30s`) keeps the pool moving without hammering
+  public APIs. Delays, source picks, and local stir timing are drawn from the voidstream
   pool itself (via the PRNG), not from `Math.random`.
 
 ## The local source

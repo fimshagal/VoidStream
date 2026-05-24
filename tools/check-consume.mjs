@@ -314,10 +314,10 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
 }
 
 // Після першого tick-у при coverage < 50% наступна затримка — warmup
-// (2..10 с), не довгий steady-інтервал.
+// (2..5 с), не довгий steady-інтервал.
 {
     const WARMUP_MIN = 2_000;
-    const WARMUP_MAX = 10_000;
+    const WARMUP_MAX = 5_000;
 
     const origSetTimeout = globalThis.setTimeout;
     const origFetch = globalThis.fetch;
@@ -365,7 +365,7 @@ assert.ok(optsDts.includes("hash("), ".d.ts: hash() alias must remain");
         globalThis.setTimeout = origSetTimeout;
         globalThis.fetch = origFetch;
     }
-    console.log(`  ok  warmup interval (2..10s) while coverage < 50%`);
+    console.log(`  ok  warmup interval (2..5s) while coverage < 50%`);
 }
 
 // Поки coverage < 60% планувальник тягне лише з ще не доставлених
